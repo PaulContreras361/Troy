@@ -1,25 +1,31 @@
 import streamlit as st
+from openai import OpenAI
 
-st.set_page_config(
-    page_title="TROY",
-    page_icon="🤖",
-    layout="wide"
-)
+# 1. Setup the connection to the Brain (OpenAI)
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.title("🤖 TROY")
-st.subheader("Personal AI Assistant")
+# 2. Memory: Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-st.write("Welcome, Paul!")
+# 3. UI: Display previous messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-user_input = st.text_input("Talk to TROY:")
+# 4. Handle new user input
+if prompt := st.chat_input("What is on your mind?"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-if user_input:
-    st.success(f"You said: {user_input}")
-
-st.sidebar.title("TROY")
-st.sidebar.write("Prototype v0.1")
-st.sidebar.write("✅ Chat")
-st.sidebar.write("🔜 Memory")
-st.sidebar.write("🔜 File Uploads")
-st.sidebar.write("🔜 AI Brain")
-
+    # 5. Generate and display TROY's response
+    with st.chat_message("assistant"):
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=st.session_state.messages
+        )
+        full_response = response.choices[0].message.content
+        st.markdown(full_response)
+    
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
