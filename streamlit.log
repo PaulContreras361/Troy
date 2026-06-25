@@ -1,0 +1,64 @@
+nohup: ignoring input
+
+Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
+
+2026-06-22 02:29:00.348 Uvicorn server started on 0.0.0.0:8501
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://10.0.0.216:8501
+  External URL: http://20.171.127.65:8501
+
+2026-06-22 02:52:21.020 Uncaught app execution
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/session_state.py", line 539, in __getitem__
+    base_value = self._getitem(widget_id, key)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/session_state.py", line 592, in _getitem
+    raise KeyError
+KeyError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/session_state_proxy.py", line 130, in __getattr__
+    return self[key]
+           ~~~~^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/session_state_proxy.py", line 101, in __getitem__
+    return get_session_state()[key]
+           ~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/safe_session_state.py", line 104, in __getitem__
+    return self._state[key]
+           ~~~~~~~~~~~^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/session_state.py", line 546, in __getitem__
+    raise KeyError(_missing_key_error_message(key))
+KeyError: 'st.session_state has no key "active_project". Did you forget to initialize it? More info: https://docs.streamlit.io/develop/concepts/architecture/session-state#initialization'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 789, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Troy/app.py", line 52, in <module>
+    st.subheader(f"Working on: {st.session_state.active_project}")
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/state/session_state_proxy.py", line 132, in __getattr__
+    raise AttributeError(_missing_attr_error_message(key))
+AttributeError: st.session_state has no attribute "active_project". Did you forget to initialize it? More info: https://docs.streamlit.io/develop/concepts/architecture/session-state#initialization
+2026-06-22 02:59:56.748 Uncaught app execution
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 789, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Troy/app.py", line 412, in <module>
+    query_params = st.experimental_get_query_params()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'streamlit' has no attribute 'experimental_get_query_params'
