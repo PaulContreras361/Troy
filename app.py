@@ -1,5 +1,7 @@
 import base64
 import html
+import json
+import time
 import io
 import os
 import re
@@ -275,6 +277,55 @@ st.markdown(
         letter-spacing: 0.25em;
         font-size: 0.85rem;
     }
+    /* Recents list: left-aligned rows like Claude's sidebar */
+    .st-key-recents button {
+        justify-content: flex-start;
+        text-align: left;
+        padding-left: 0.6rem;
+        min-height: 2.6rem;
+    }
+    .st-key-recents button > div,
+    .st-key-recents button > div > span {
+        justify-content: flex-start;
+        width: 100%;
+        min-width: 0;
+    }
+    .st-key-recents button p {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: left;
+    }
+    .st-key-recents button[kind="tertiary"] {
+        border: 1px solid transparent;
+    }
+    .troy-side-title {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 1.9rem;
+        margin: -1.5rem 0 0.75rem;
+    }
+    .troy-side-label {
+        opacity: 0.6;
+        font-size: 0.9rem;
+        margin: 0.75rem 0 0.25rem;
+    }
+    .troy-badge {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin-top: 1.5rem;
+        font-weight: 600;
+    }
+    .troy-badge span {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 1px solid rgba(128, 128, 128, 0.45);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.9rem;
+    }
     .troy-topbar {
         display: flex;
         align-items: center;
@@ -392,8 +443,6 @@ try:
 except Exception:
     api_key = os.environ.get("GEMINI_API_KEY", "")
 
-st.sidebar.title("TROY")
-st.sidebar.write("Prototype v0.2")
 st.html(SPEAKER_JS, unsafe_allow_javascript=True)
 auto_speak = st.toggle(
     "🔊 Troy speaks out loud", value=True, key="voice_on",
@@ -413,37 +462,232 @@ if st.session_state.pop("hide_keyboard", False):
     )
 if not auto_speak:
     page_jobs.append("window.troyAudio && window.troyAudio.stop();")
+if st.session_state.pop("close_sidebar", False):
+    # On a phone, slide the sidebar shut after picking a chat (like Claude).
+    page_jobs.append(
+        """setTimeout(() => {
+             if (window.innerWidth > 700) return;
+             const b = document.querySelector(
+               '[data-testid="stSidebarCollapseButton"] button, [data-testid="stSidebarHeader"] button');
+             if (b) b.click();
+           }, 50);"""
+    )
 st.html(
     "<script>(() => {" + "\n".join(page_jobs) + "})();</script>",
     unsafe_allow_javascript=True,
 )
-use_human_voice = st.sidebar.checkbox(
-    "Human voice (Gemini)",
-    value=True,
-    help="Uses Gemini's free voice model: one extra free call per reply, on its own "
-    "daily allowance. If it's unavailable, Troy falls back to your device's voice.",
-)
-voice_label = st.sidebar.selectbox(
-    "Troy's voice", list(TTS_VOICES), disabled=not use_human_voice
-)
-
-# ---- Claude key (Troy's brain, no daily limit) ----
+# ---- Keys from Streamlit Secrets or environment ----
 claude_key = ""
 try:
     claude_key = st.secrets["ANTHROPIC_API_KEY"]
 except Exception:
     claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
-if not claude_key:
-    claude_key = st.sidebar.text_input("Paste your Claude API key:", type="password")
-if not api_key:
-    api_key = st.sidebar.text_input(
-        "Paste your free Gemini key (voice):", type="password"
+
+# ---- Chat state ----
+for name, start in (
+    ("messages", []), ("claude_history", []), ("chats", {}), ("chat_id", None),
+    ("store_loaded", False), ("save_payload", ""), ("save_rev", ""),
+):
+    if name not in st.session_state:
+        st.session_state[name] = start
+if "load_token" not in st.session_state:
+    st.session_state.load_token = uuid4().hex
+
+# Saves Troy's chats in this phone's browser storage, so they're private to the
+# phone and survive Troy restarting on Streamlit Cloud.
+STORE_JS = """
+export default function(component) {
+  const { data, setTriggerValue } = component;
+  const KEY = "troy_chats_v1";
+  if (!data) return;
+  if (data.save_rev && window.__troySavedRev !== data.save_rev) {
+    try { localStorage.setItem(KEY, data.save); window.__troySavedRev = data.save_rev; } catch (e) {}
+  }
+  if (data.load_token && window.__troyLoadToken !== data.load_token) {
+    window.__troyLoadToken = data.load_token;
+    let raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) {}
+    setTriggerValue("loaded", raw || "{}");
+  }
+}
+"""
+
+
+@st.cache_resource
+def troy_store():
+    return st.components.v2.component("troy_store", js=STORE_JS)
+
+
+MAX_SAVED_CHATS = 40
+
+
+def queue_save():
+    """Send the chat list to the phone's storage on the next draw."""
+    if not st.session_state.store_loaded:
+        return  # never overwrite saved chats before they've been read
+    newest = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
+    st.session_state.chats = {c["id"]: c for c in newest[:MAX_SAVED_CHATS]}
+    st.session_state.save_payload = json.dumps(st.session_state.chats)
+    st.session_state.save_rev = uuid4().hex
+
+
+def chat_title(messages):
+    for m in messages:
+        if m["role"] == "user":
+            first = m["text"].split("\n\n📎")[0].removeprefix("🎤 ").strip()
+            first = first or "Files"
+            return first[:48] + ("…" if len(first) > 48 else "")
+    return "New chat"
+
+
+def save_current():
+    msgs = [{"role": m["role"], "text": m["text"]} for m in st.session_state.messages]
+    if not msgs:
+        return
+    cid = st.session_state.chat_id or uuid4().hex[:12]
+    old = st.session_state.chats.get(cid, {})
+    st.session_state.chats[cid] = {
+        "id": cid, "title": old.get("title") or chat_title(msgs),
+        "updated": time.time(), "messages": msgs,
+    }
+    st.session_state.chat_id = cid
+    queue_save()
+
+
+def new_gemini_chat(history=None):
+    if "client" not in st.session_state:
+        return
+    contents = [
+        genai.types.Content(
+            role="user" if m["role"] == "user" else "model",
+            parts=[genai.types.Part.from_text(text=m.get("text") or m.get("content", ""))],
+        )
+        for m in (history or [])
+    ]
+    st.session_state.chat = st.session_state.client.chats.create(
+        model="gemini-2.5-flash",
+        config=genai.types.GenerateContentConfig(system_instruction=TROY_INSTRUCTIONS),
+        history=contents or None,
     )
 
-brain = "claude" if claude_key else ("gemini" if api_key else None)
-claude_model = CLAUDE_MODELS[
-    st.sidebar.selectbox("Troy's brain", list(CLAUDE_MODELS), disabled=brain != "claude")
-]
+
+def history_for_brain(msgs):
+    """Text-only history in strict user/assistant turns (what Claude requires)."""
+    out = []
+    for m in msgs:
+        role = "user" if m["role"] == "user" else "assistant"
+        if out and out[-1]["role"] == role:
+            out[-1]["content"] += "\n\n" + m["text"]
+        else:
+            out.append({"role": role, "content": m["text"]})
+    return out
+
+
+def start_new_chat():
+    st.session_state.messages = []
+    st.session_state.claude_history = []
+    st.session_state.chat_id = None
+    new_gemini_chat()
+
+
+def open_chat(cid):
+    chat = st.session_state.chats[cid]
+    st.session_state.messages = [dict(m) for m in chat["messages"]]
+    hist = history_for_brain(chat["messages"])
+    st.session_state.claude_history = hist
+    st.session_state.chat_id = cid
+    new_gemini_chat(hist)
+
+
+with st.sidebar:
+    store = troy_store()(
+        data={
+            "load_token": "" if st.session_state.store_loaded else st.session_state.load_token,
+            "save": st.session_state.save_payload,
+            "save_rev": st.session_state.save_rev,
+        },
+        key="troy_store",
+        on_loaded_change=lambda: None,
+        height=0,
+    )
+    if not st.session_state.store_loaded and store.loaded is not None:
+        try:
+            saved = json.loads(store.loaded) or {}
+        except Exception:
+            saved = {}
+        saved.update(st.session_state.chats)  # keep anything from this visit
+        st.session_state.chats = saved
+        st.session_state.store_loaded = True
+        queue_save()
+
+    st.markdown('<div class="troy-side-title">TROY</div>', unsafe_allow_html=True)
+    if st.button("New chat", key="new_chat", icon=":material/add:", width="stretch"):
+        start_new_chat()
+        st.session_state.close_sidebar = True
+        st.rerun()
+    query = st.text_input(
+        "Search chats", key="chat_search", placeholder="Search chats",
+        label_visibility="collapsed", icon=":material/search:",
+    ).strip().lower()
+
+    with st.expander("Settings", key="settings_panel", icon=":material/settings:"):
+        use_human_voice = st.checkbox(
+            "Human voice (Gemini)",
+            value=True,
+            help="Uses Gemini's free voice model: one extra free call per reply, on its own "
+            "daily allowance. If it's unavailable, Troy falls back to your device's voice.",
+        )
+        voice_label = st.selectbox(
+            "Troy's voice", list(TTS_VOICES), disabled=not use_human_voice
+        )
+        if not claude_key:
+            claude_key = st.text_input("Paste your Claude API key:", type="password")
+        if not api_key:
+            api_key = st.text_input("Paste your free Gemini key (voice):", type="password")
+        brain = "claude" if claude_key else ("gemini" if api_key else None)
+        claude_model = CLAUDE_MODELS[
+            st.selectbox("Troy's brain", list(CLAUDE_MODELS), disabled=brain != "claude")
+        ]
+        if brain == "claude":
+            st.caption("AI brain: Claude — no daily limit (uses your Console credits)")
+        elif brain == "gemini":
+            st.caption("AI brain: Gemini free tier (20 messages a day)")
+        else:
+            st.caption("AI brain: waiting for a key")
+        st.caption("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
+        st.caption("Chats are saved on this phone only.")
+
+    st.markdown('<div class="troy-side-label">Recents</div>', unsafe_allow_html=True)
+    recents = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
+    if query:
+        recents = [
+            c for c in recents
+            if query in c["title"].lower()
+            or any(query in m["text"].lower() for m in c["messages"])
+        ]
+    if not recents:
+        st.caption("No chats yet." if not query else "No chats match.")
+    recents_box = st.container(key="recents", gap="small")
+    for c in recents:
+        current = c["id"] == st.session_state.chat_id
+        if recents_box.button(
+            c["title"], key=f"open_{c['id']}", icon=":material/chat_bubble:",
+            type="secondary" if current else "tertiary", width="stretch",
+        ) and not current:
+            open_chat(c["id"])
+            st.session_state.close_sidebar = True
+            st.rerun()
+    if st.session_state.chat_id:
+        if st.button("Delete this chat", key="delete_chat", icon=":material/delete:",
+                     type="tertiary"):
+            st.session_state.chats.pop(st.session_state.chat_id, None)
+            queue_save()
+            start_new_chat()
+            st.rerun()
+    st.markdown(
+        '<div class="troy-badge"><span>PC</span>Paul Contreras</div>',
+        unsafe_allow_html=True,
+    )
 
 # Keep clients in session_state. If they are throwaway variables, Python
 # deletes them after this run and the chat fails with "client has been closed".
@@ -452,31 +696,9 @@ if claude_key and st.session_state.get("claude_key") != claude_key:
     st.session_state.claude_key = claude_key
 if api_key and st.session_state.get("key") != api_key:
     st.session_state.client = genai.Client(api_key=api_key)
-    st.session_state.chat = st.session_state.client.chats.create(
-        model="gemini-2.5-flash",
-        config=genai.types.GenerateContentConfig(
-            system_instruction=TROY_INSTRUCTIONS,
-        ),
-    )
+    new_gemini_chat(history_for_brain(st.session_state.messages))
     st.session_state.key = api_key
 
-if brain == "claude":
-    st.sidebar.write("AI brain: Claude — no daily limit (uses your Console credits)")
-elif brain == "gemini":
-    st.sidebar.write("AI brain: Gemini free tier (20 messages a day)")
-else:
-    st.sidebar.write("AI brain: waiting for a key")
-st.sidebar.write("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
-
-st.sidebar.write("Chat: on")
-st.sidebar.write("Memory: on (this session)")
-st.sidebar.write("File uploads: on (PDF, photos, text)")
-
-# Make sure the history list exists.
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "claude_history" not in st.session_state:
-    st.session_state.claude_history = []
 
 def make_voice(msg):
     """Fill in msg['audio'], or a note saying why the device voice is used."""
@@ -523,7 +745,7 @@ send_voice = st.button("Send voice message", disabled=voice_audio is None)
 
 if "file_key" not in st.session_state:
     st.session_state.file_key = 0
-with st.expander("📎 Attach a PDF, photo, or text file"):
+with st.expander("📎 Attach a PDF, photo, or text file", key="attach_panel"):
     attached = st.file_uploader(
         "Troy reads these along with your next message",
         type=list(FILE_TYPES),
@@ -705,6 +927,7 @@ def send_to_troy(user_text, files, text, audio=None):
         # Show the text now; the voice is made right after it appears.
         reply["pending_voice"] = True
     st.session_state.messages.append(reply)
+    save_current()
 
 
 
