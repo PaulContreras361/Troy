@@ -333,7 +333,7 @@ st.markdown(
     /* Lift the box itself (the outer frame didn't move on Streamlit Cloud).
        1.5rem keeps it just above the two badges. */
     [data-testid="stChatInput"] {
-        margin-bottom: calc(1.5rem + env(safe-area-inset-bottom)) !important;
+        margin-bottom: calc(0.5rem + env(safe-area-inset-bottom)) !important;
     }
     [data-testid="stChatInput"] {
         border-radius: 1.6rem !important;
@@ -398,9 +398,19 @@ st.markdown(
         display: flex;
         align-items: center;
         gap: 0.75rem;
+        min-height: 44px;
+        padding-left: 56px;
         margin-bottom: 0.25rem;
     }
+    /* ☰ stays pinned top-left while you scroll, just below Safari's address
+       bar, like Claude's menu button. */
     .troy-menu {
+        position: fixed;
+        top: calc(env(safe-area-inset-top) + 4.75rem);
+        left: 0.75rem;
+        z-index: 1000;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
         width: 44px;
         height: 44px;
         display: inline-flex;
@@ -410,7 +420,7 @@ st.markdown(
         gap: 5px;
         border: 1px solid rgba(128, 128, 128, 0.35);
         border-radius: 12px;
-        background: transparent;
+        background: rgba(20, 22, 28, 0.55);
         color: inherit;
         cursor: pointer;
         padding: 0;
@@ -421,6 +431,9 @@ st.markdown(
         height: 2px;
         border-radius: 2px;
         background: currentColor;
+    }
+    @media (prefers-color-scheme: light) {
+        .troy-menu { background: rgba(255, 255, 255, 0.75); }
     }
     .troy-menu:active {
         opacity: 0.6;
