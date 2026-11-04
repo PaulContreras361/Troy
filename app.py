@@ -1,6 +1,31 @@
+import html
 import os
 import streamlit as st
+import streamlit.components.v1 as components
 from google import genai
+
+def speak_reply(text):
+    safe_text = html.escape(text)
+    components.html(
+        f"""
+        <button id="speak-button" type="button">🔊 Read aloud</button>
+        <span id="speech-text" style="display:none">{safe_text}</span>
+        <script>
+        const button = document.getElementById("speak-button");
+        button.addEventListener("click", () => {{
+            if (!("speechSynthesis" in window)) {{
+                button.textContent = "Speech is not supported in this browser";
+                return;
+            }}
+            window.speechSynthesis.cancel();
+            const text = document.getElementById("speech-text").textContent;
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }});
+        </script>
+        """,
+        height=48,
+    )
+
 
 TUTOR_INSTRUCTIONS = """
 You are Troy, a patient, encouraging tutor who can help the learner explore any subject.
@@ -92,20 +117,35 @@ if "messages" not in st.session_state:
 
 # ---- Show the conversation so far ----
 for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["text"])
+    with st.chat_message(msg["role"]):
+        st.write(msg["text"])
+        if msg["role"] == "assistant":
+            speak_reply(msg["text"])
 
-# ---- Talk to Troy ----
 prompt = st.chat_input("What would you like to learn?")
+voice_audio = st.audio_input("Or record a voice message")
+send_voice = st.button("Send voice message", disabled=voice_audio is None)
 
-if prompt:
+
+def send_to_troy(user_text, message):
+    st.session_state.messages.append({"role": "user", "text": user_text})
+    try:
+        answer = st.session_state.chat.send_message(message).text
+    except Exception as e:
+        answer = "Troy had a problem: " + str(e)
+    st.session_state.messages.append({"role": "assistant", "text": answer})
+
+
+if prompt or send_voice:
     if not api_key:
         st.warning("Paste your free Gemini key in the sidebar first, then try again.")
+    elif send_voice:
+        audio_part = genai.types.Part.from_bytes(
+            data=voice_audio.getvalue(),
+            mime_type=voice_audio.type or "audio/wav",
+        )
+        send_to_troy("🎤 Voice message", audio_part)
+        st.rerun()
     else:
-        st.chat_message("user").write(prompt)
-        st.session_state.messages.append({"role": "user", "text": prompt})
-        try:
-            answer = st.session_state.chat.send_message(prompt).text
-        except Exception as e:
-            answer = "Troy had a problem: " + str(e)
-        st.chat_message("assistant").write(answer)
-        st.session_state.messages.append({"role": "assistant", "text": answer})
+        send_to_troy(prompt, prompt)
+        st.rerun()

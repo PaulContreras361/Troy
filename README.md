@@ -72,6 +72,8 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 ## Usage
 
 - Ask Troy about a topic, request a step-by-step explanation, or ask for practice questions.
+- Use **Record a voice message** to speak to Troy, then select **Send voice message**. Select **Read aloud** below a reply to hear it.
 - Use the sidebar to add a Gemini API key.
 - The app uses Gemini 2.5 Flash.
 - Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.
+- Voice recording requires microphone permission and browser support; spoken replies use your browser's text-to-speech voices.
