@@ -8,6 +8,22 @@ from google import genai
 
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
+MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_FILES = 5
+
+# File types Troy can read, and the type name Gemini expects for each.
+FILE_TYPES = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "heic": "image/heic",
+    "heif": "image/heif",
+    "txt": "text/plain",
+    "md": "text/plain",
+    "csv": "text/csv",
+}
 
 
 def speech_text(text):
@@ -76,6 +92,9 @@ For high-stakes medical, legal, financial, or safety topics, give general educat
 information and encourage checking important decisions with a qualified professional.
 For cybersecurity topics, prioritize defending systems the learner owns or is authorized
 to assess. Do not assist with unauthorized access, credential theft, malware, or evasion.
+The learner can attach PDFs, photos, and text files to a message. When files are attached,
+read them and use what is in them in your answer. Never tell the learner you can't read
+attached files.
 """
 
 st.set_page_config(page_title="TROY", layout="centered")
@@ -153,7 +172,7 @@ else:
 
 st.sidebar.write("Chat: on")
 st.sidebar.write("Memory: on (this session)")
-st.sidebar.write("File uploads: soon")
+st.sidebar.write("File uploads: on (PDF, photos, text)")
 
 # Make sure the history list exists.
 if "messages" not in st.session_state:
@@ -175,6 +194,17 @@ voice_audio = st.audio_input(
 )
 send_voice = st.button("Send voice message", disabled=voice_audio is None)
 
+if "file_key" not in st.session_state:
+    st.session_state.file_key = 0
+with st.expander("📎 Attach a PDF, photo, or text file"):
+    attached = st.file_uploader(
+        "Troy reads these along with your next message",
+        type=list(FILE_TYPES),
+        accept_multiple_files=True,
+        key=f"files_{st.session_state.file_key}",
+    ) or []
+    ask_about_files = st.button("Ask Troy about these files", disabled=not attached)
+
 
 def explain_error(e):
     """Turn an error into a short, honest message without leaking details."""
@@ -186,6 +216,27 @@ def explain_error(e):
     if code is not None and code >= 500:
         return f"Gemini's servers had a problem ({code}). Try again in a minute."
     return f"Troy had a problem ({type(e).__name__}). Try again."
+
+
+def file_parts(files):
+    """Turn uploaded files into pieces Gemini can read. Returns (parts, problem)."""
+    if len(files) > MAX_FILES:
+        return None, f"Please attach {MAX_FILES} files or fewer at a time."
+    parts = []
+    for f in files:
+        data = f.getvalue()
+        if len(data) > MAX_FILE_BYTES:
+            return None, f"{f.name} is over 10 MB. Try a smaller file."
+        ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
+        mime = FILE_TYPES.get(ext)
+        if mime is None:
+            return None, f"Troy can't read {f.name}. Use a PDF, photo, or text file."
+        parts.append(genai.types.Part.from_bytes(data=data, mime_type=mime))
+    return parts, None
+
+
+def file_label(files):
+    return "".join(f"\n\n📎 {f.name}" for f in files)
 
 
 def send_to_troy(user_text, message):
@@ -202,9 +253,12 @@ def send_to_troy(user_text, message):
     )
 
 
-if prompt or send_voice:
+if prompt or send_voice or ask_about_files:
+    parts, problem = file_parts(attached)
     if not api_key:
         st.warning("Paste your free Gemini key in the sidebar first, then try again.")
+    elif problem:
+        st.warning(problem)
     elif send_voice:
         audio_bytes = voice_audio.getvalue()
         if len(audio_bytes) > MAX_AUDIO_BYTES:
@@ -215,12 +269,18 @@ if prompt or send_voice:
                 mime_type=voice_audio.type or "audio/wav",
             )
             send_to_troy(
-                "🎤 Voice message",
-                [audio_part, "This is the learner's voice message. Reply to what they said."],
+                "🎤 Voice message" + file_label(attached),
+                parts
+                + [audio_part, "This is the learner's voice message. Reply to what they said."],
             )
-            # New key = fresh recorder, so the same clip can't be sent twice.
+            # New keys = fresh recorder and uploader, so nothing is sent twice.
             st.session_state.voice_key += 1
+            if attached:
+                st.session_state.file_key += 1
             st.rerun()
     else:
-        send_to_troy(prompt, prompt)
+        text = prompt or "Please read the attached file(s) and help me understand them."
+        send_to_troy(text + file_label(attached), parts + [text] if parts else text)
+        if attached:
+            st.session_state.file_key += 1
         st.rerun()
