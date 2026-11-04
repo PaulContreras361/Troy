@@ -495,7 +495,9 @@ def explain_error(e):
         return f"Troy had a problem talking to Claude ({type(e).__name__}). Try again."
     code = getattr(e, "code", None)
     if code == 429:
-        return "Troy hit today's free Gemini limit (429). Try again later or tomorrow."
+        return ("Troy used up today's free Gemini messages (429). Add your Claude key "
+                "(ANTHROPIC_API_KEY in Troy's Streamlit Secrets) for no daily limit, "
+                "or try again tomorrow.")
     if code in (400, 401, 403):
         return f"Gemini rejected the request ({code}). Check that the API key is correct."
     if code is not None and code >= 500:
