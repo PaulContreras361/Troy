@@ -1,36 +1,47 @@
 import html
 import os
+from uuid import uuid4
+
 import streamlit as st
-import streamlit.components.v1 as components
 from google import genai
 
+
 def speak_reply(text, autoplay=False):
-    safe_text = html.escape(text)
+    container_id = f"troy-speech-{uuid4().hex}"
+    safe_text = html.escape(str(text or ""))
     start_speech = "speak();" if autoplay else ""
-    components.html(
+    st.html(
         f"""
-        <button type="button" onclick="speak()">🔊 Read aloud</button>
-        <button type="button" onclick="window.speechSynthesis.cancel()">⏹ Stop speaking</button>
-        <span id="speech-text" style="display:none">{safe_text}</span>
+        <div id="{container_id}">
+            <button class="read-aloud" type="button">🔊 Read aloud</button>
+            <button class="stop-speaking" type="button">⏹ Stop speaking</button>
+            <span class="speech-text" style="display:none">{safe_text}</span>
+        </div>
         <script>
-        function speak() {{
-            if (!("speechSynthesis" in window)) {{
-                return;
+        (() => {{
+            const container = document.getElementById("{container_id}");
+            const readButton = container.querySelector(".read-aloud");
+            const stopButton = container.querySelector(".stop-speaking");
+            function speak() {{
+                if (!("speechSynthesis" in window)) {{
+                    readButton.textContent = "Speech is not supported in this browser";
+                    return;
+                }}
+                window.speechSynthesis.cancel();
+                const text = container.querySelector(".speech-text").textContent;
+                window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
             }}
-            window.speechSynthesis.cancel();
-            const text = document.getElementById("speech-text").textContent;
-            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-        }}
-        if (!("speechSynthesis" in window)) {{
-            document.querySelectorAll("button").forEach((button) => {{
-                button.disabled = true;
-                button.textContent = "Speech is not supported in this browser";
+            readButton.addEventListener("click", speak);
+            stopButton.addEventListener("click", () => {{
+                if ("speechSynthesis" in window) {{
+                    window.speechSynthesis.cancel();
+                }}
             }});
-        }}
-        {start_speech}
+            {start_speech}
+        }})();
         </script>
         """,
-        height=48,
+        unsafe_allow_javascript=True,
     )
 
 
