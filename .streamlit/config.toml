@@ -7,3 +7,11 @@ showErrorDetails = "none"
 
 [browser]
 gatherUsageStats = false
+
+# Troy teal for buttons and switches; separate light/dark sections keep
+# automatic dark mode on the iPhone.
+[theme.light]
+primaryColor = "#0b8d8c"
+
+[theme.dark]
+primaryColor = "#0ea5a4"

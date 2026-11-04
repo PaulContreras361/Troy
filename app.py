@@ -15,6 +15,8 @@ import streamlit as st
 from google import genai
 from PIL import Image
 
+import troy_study
+
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -396,6 +398,19 @@ st.markdown(
         min-width: 2.4rem;
         min-height: 2.4rem;
     }
+    .troy-study-doc { opacity: 0.75; font-size: 0.95rem; margin-bottom: 0.25rem; }
+    .troy-study-group { color: #0ea5a4; font-weight: 700; letter-spacing: 0.04em;
+        font-size: 0.85rem; margin-top: 0.5rem; }
+    .troy-study-title { font-family: Georgia, "Times New Roman", serif; font-size: 1.6rem;
+        line-height: 1.25; margin: 0.2rem 0 0.5rem; }
+    .troy-study-label { opacity: 0.65; font-size: 0.9rem; margin-top: 0.75rem; }
+    .troy-read { font-size: 1.2rem; line-height: 1.65; border: 1px solid rgba(128,128,128,0.3);
+        border-radius: 1rem; padding: 0.9rem 1rem; background: rgba(128,128,128,0.06); }
+    .troy-read p { margin: 0 0 0.8rem; }
+    .troy-read p:last-child { margin-bottom: 0; }
+    .troy-read .ts { cursor: pointer; border-radius: 0.3rem; padding: 0.05rem 0.1rem;
+        transition: background 0.2s; }
+    .troy-read .ts.on { background: rgba(14, 165, 164, 0.35); }
     .troy-topbar {
         display: flex;
         align-items: center;
@@ -510,7 +525,7 @@ MENU_BUTTON = """
 })();
 </script>
 """
-if not st.session_state.get("messages"):
+if not st.session_state.get("messages") and not st.session_state.get("study_on"):
     st.html(
         MENU_BUTTON
         + f'''<div class="troy-welcome">
@@ -589,6 +604,7 @@ except Exception:
 for name, start in (
     ("messages", []), ("claude_history", []), ("chats", {}), ("chat_id", None),
     ("store_loaded", False), ("save_payload", ""), ("save_rev", ""),
+    ("study_on", False), ("study", None), ("study_saved", None),
 ):
     if name not in st.session_state:
         st.session_state[name] = start
@@ -629,7 +645,9 @@ def queue_save():
         return  # never overwrite saved chats before they've been read
     newest = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
     st.session_state.chats = {c["id"]: c for c in newest[:MAX_SAVED_CHATS]}
-    st.session_state.save_payload = json.dumps(st.session_state.chats)
+    st.session_state.save_payload = json.dumps(
+        {"v": 2, "chats": st.session_state.chats, "study": st.session_state.study_saved}
+    )
     st.session_state.save_rev = uuid4().hex
 
 
@@ -717,6 +735,10 @@ with st.sidebar:
             saved = json.loads(store.loaded) or {}
         except Exception:
             saved = {}
+        if isinstance(saved, dict) and saved.get("v") == 2:
+            if saved.get("study") and not st.session_state.study_saved:
+                st.session_state.study_saved = saved["study"]
+            saved = saved.get("chats") or {}
         saved.update(st.session_state.chats)  # keep anything from this visit
         st.session_state.chats = saved
         st.session_state.store_loaded = True
@@ -725,6 +747,11 @@ with st.sidebar:
     st.markdown('<div class="troy-side-title">TROY</div>', unsafe_allow_html=True)
     if st.button("New chat", key="new_chat", icon=":material/add:", width="stretch"):
         start_new_chat()
+        st.session_state.study_on = False
+        st.session_state.close_sidebar = True
+        st.rerun()
+    if st.button("Study a PDF", key="open_study", icon=":material/menu_book:", width="stretch"):
+        st.session_state.study_on = True
         st.session_state.close_sidebar = True
         st.rerun()
     query = st.text_input(
@@ -776,6 +803,7 @@ with st.sidebar:
             c["title"], key=f"open_{c['id']}", icon=":material/chat_bubble:",
             type="secondary" if current else "tertiary", width="stretch",
         ) and not current:
+            st.session_state.study_on = False
             open_chat(c["id"])
             st.session_state.close_sidebar = True
             st.rerun()
@@ -820,8 +848,8 @@ def make_voice(msg):
             )
 
 
-# ---- Show the conversation so far ----
-for msg in st.session_state.messages:
+# ---- Show the conversation so far (Study mode draws its own screen later) ----
+for msg in ([] if st.session_state.study_on else st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["text"])
         if msg["role"] == "assistant":
@@ -837,9 +865,17 @@ for msg in st.session_state.messages:
                     st.caption(msg["voice_note"])
                 speak_reply(msg["text"], autoplay=autoplay)
 
+if not st.session_state.study_on and st.session_state.get("last_pdf"):
+    _pdf_name = st.session_state.last_pdf["name"]
+    if st.button(f"Study “{_pdf_name}” section by section", key="study_from_chat",
+                 icon=":material/menu_book:"):
+        st.session_state.study_on = True
+        st.session_state.study_load = st.session_state.last_pdf
+        st.rerun()
+
 # One message box, like Claude's: ＋ for files, the text, a mic, and send.
 submission = st.chat_input(
-    "How can I help you today?",
+    "Ask Troy about this section…" if st.session_state.study_on else "How can I help you today?",
     key="composer",
     max_chars=MAX_PROMPT_CHARS,
     accept_file="multiple",
@@ -1003,6 +1039,9 @@ def file_label(files):
 
 def send_to_troy(user_text, files, text, audio=None):
     """Send Paul's message to Troy's brain and add the reply to the chat."""
+    for f in files:
+        if f["mime"] == "application/pdf":
+            st.session_state.last_pdf = {"name": f["name"], "data": f["data"]}
     st.session_state.messages.append({"role": "user", "text": user_text})
     st.session_state.hide_keyboard = True
     try:
@@ -1030,7 +1069,388 @@ def send_to_troy(user_text, files, text, audio=None):
 
 
 
-if prompt or send_voice or ask_about_files:
+
+# =====================================================================
+# 📘 Study mode — Troy reads a PDF section by section while Paul follows
+# along, then answers questions about it only when Paul asks.
+# =====================================================================
+STUDY_SYSTEM = """
+You are Troy, helping Paul study a document one section at a time.
+Use ONLY the section text you are given. Never add rules, numbers, steps, or
+requirements that are not in it. If the section doesn't answer something, say
+so plainly and, if you can tell, which kind of section would. Plain English,
+warm and direct, short sentences that sound good read aloud. No markdown
+tables or headings.
+"""
+
+STUDY_STYLES = {
+    "story": ("📖 Story",
+              "Retell this section as a short story (under 220 words) about a worker at "
+              "a Gulf Coast plant whose day runs straight into what this section says. "
+              "Every fact must match the section exactly. End with one line that starts "
+              "'Bottom line:'."),
+    "podcast": ("🎙 Podcast",
+                "Write a short two-person podcast moment (under 220 words) between Troy "
+                "and Jess talking this section through. Start each line with 'Troy:' or "
+                "'Jess:'. Jess asks what a listener would ask; Troy answers from the "
+                "section. Every fact must match the section exactly."),
+    "coach": ("🎯 Coach",
+              "Talk straight to Paul like a coach (under 150 words): what this section "
+              "says, why it matters on the job, and the one thing to remember."),
+}
+
+
+def ask_brain_once(task, section, max_tokens=1200):
+    """One-off question about a section (doesn't touch the chat history)."""
+    content = f"Document: {st.session_state.study['name']}\n\nSECTION:\n{section}\n\nTASK:\n{task}"
+    if brain == "claude":
+        r = st.session_state.claude.messages.create(
+            model=claude_model, max_tokens=max_tokens, system=STUDY_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+        )
+        return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
+    r = st.session_state.client.models.generate_content(
+        model="gemini-2.5-flash", contents=content,
+        config=genai.types.GenerateContentConfig(system_instruction=STUDY_SYSTEM),
+    )
+    return (r.text or "").strip()
+
+
+def section_label(sec):
+    head = f"{sec['num']} {sec['title']}".strip()
+    return head
+
+
+def section_for_brain(sec):
+    group = f"(Part of {sec['group']})\n" if sec.get("group") else ""
+    return f"{group}{section_label(sec)}\n{sec['text']}"
+
+
+def load_study_pdf(name, data):
+    try:
+        result = troy_study.split_sections(data)
+    except Exception:
+        st.warning(f"Troy couldn't open {name}. Is it a PDF?")
+        return
+    if result["method"] == "scanned":
+        st.warning(f"“{name}” is scanned pictures of pages, so Troy can't pull the words out "
+                   "for free reading. You can still attach it with ＋ in a regular chat and "
+                   "ask questions about it.")
+        return
+    st.session_state.study = {
+        "name": name, "sections": result["sections"], "idx": 0,
+        "qa": {}, "updated": time.time(),
+    }
+    st.session_state.study_autoread = True
+    save_study_progress()
+
+
+def save_study_progress():
+    s = st.session_state.study
+    if not s:
+        return
+    s["updated"] = time.time()
+    st.session_state.study_saved = {
+        "name": s["name"], "sections": s["sections"], "idx": s["idx"], "updated": s["updated"],
+    }
+    queue_save()
+
+
+def go_to_section(i):
+    s = st.session_state.study
+    s["idx"] = max(0, min(i, len(s["sections"]) - 1))
+    st.session_state.study_autoread = True
+    save_study_progress()
+
+
+def add_study_answer(kind, question, answer, quiz=None):
+    s = st.session_state.study
+    item = {"kind": kind, "q": question, "a": answer, "quiz": quiz, "autoplay": auto_speak}
+    if (answer and auto_speak and use_human_voice and api_key
+            and not st.session_state.get("tts_off_today")):
+        tmp = {"text": answer}
+        make_voice(tmp)
+        item.update({k: tmp[k] for k in ("audio", "voice_note") if k in tmp})
+    s["qa"].setdefault(str(s["idx"]), []).append(item)
+
+
+def parse_quiz(text):
+    m = re.search(r"\{.*\}", text, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    choices = [str(c) for c in data.get("choices", [])][:4]
+    ans = int(data.get("answer_index", 0))
+    if len(choices) < 2 or not (0 <= ans < len(choices)) or not data.get("question"):
+        raise ValueError("bad quiz")
+    return {"question": str(data["question"]), "choices": choices, "answer": ans,
+            "why": str(data.get("why", "")), "picked": None}
+
+
+READ_ALONG_JS = """
+(() => {
+  const box = document.getElementById("%(id)s");
+  if (!box || box.dataset.ready) return;
+  box.dataset.ready = "1";
+  const RATE = %(rate)s;
+  const spans = [...box.querySelectorAll(".ts")];
+  function bestVoice() {
+    if (!window.speechSynthesis) return null;
+    const voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
+    const rank = v => (/premium/i.test(v.name) ? 60 : 0) + (/natural|neural|online/i.test(v.name) ? 50 : 0)
+      + (/enhanced/i.test(v.name) ? 40 : 0) + (/google/i.test(v.name) ? 30 : 0)
+      + (/en[-_]US/i.test(v.lang) ? 5 : 0);
+    voices.sort((a, b) => rank(b) - rank(a));
+    return voices[0] || null;
+  }
+  function clear() { spans.forEach(x => x.classList.remove("on")); }
+  function speakFrom(i0) {
+    if (!window.speechSynthesis) return;
+    if (window.troyAudio) window.troyAudio.stop(); else speechSynthesis.cancel();
+    const voice = bestVoice();
+    spans.slice(i0).forEach((sp, k) => {
+      const u = new SpeechSynthesisUtterance(sp.textContent);
+      u.rate = RATE;
+      if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch (e) {} }
+      u.onstart = () => { clear(); sp.classList.add("on");
+        const sc = document.querySelector('[data-testid="stAppScrollToBottomContainer"]');
+        if (sc) { const r = sp.getBoundingClientRect(), h = sc.getBoundingClientRect();
+          if (r.bottom > h.bottom - 140 || r.top < h.top + 90)
+            sc.scrollBy({ top: r.top - h.top - 120, behavior: "smooth" }); } };
+      if (k === spans.length - i0 - 1) u.onend = () => clear();
+      speechSynthesis.speak(u);
+    });
+  }
+  // Tap any sentence to start reading from there.
+  spans.forEach((sp, i) => sp.addEventListener("click", () => speakFrom(i)));
+  %(start)s
+})();
+"""
+
+
+def read_along(sec, autoplay, rate):
+    box_id = f"troy-read-{uuid4().hex}"
+    paras = [p for p in re.split(r"\n\s*\n", sec["text"]) if p.strip()] or [sec["text"]]
+    out, i = [], 0
+    for p in paras:
+        spans = []
+        for sentence in troy_study.sentences(p):
+            spans.append(f'<span class="ts" data-i="{i}">{html.escape(sentence)}</span>')
+            i += 1
+        out.append("<p>" + " ".join(spans) + "</p>")
+    start = ""
+    if autoplay:
+        # New section: jump back to its title (Troy's own scroll area only, so
+        # Safari's page doesn't move), then read from the first sentence.
+        start = ("const top = () => { const sc = document.querySelector("
+                 "'[data-testid=\"stAppScrollToBottomContainer\"]'); if (sc) sc.scrollTop = 0; };"
+                 "[50, 400, 900, 1600].forEach(ms => setTimeout(top, ms));"
+                 "setTimeout(() => speakFrom(0), 300);")
+    js = READ_ALONG_JS % {"id": box_id, "rate": rate, "start": start}
+    st.html(f'<div class="troy-read" id="{box_id}">{"".join(out)}</div><script>{js}</script>',
+            unsafe_allow_javascript=True)
+
+
+def render_study():
+    s = st.session_state.study
+    # A PDF handed over from the chat ("Study this section by section")
+    pending = st.session_state.pop("study_load", None)
+    if pending:
+        load_study_pdf(pending["name"], pending["data"])
+        st.rerun()
+
+    if not s:
+        st.markdown("### 📘 Study a PDF")
+        st.caption("Troy reads it to you section by section while you follow along. "
+                   "Tap Quiz me or Explain, or ask him anything about it.")
+        saved = st.session_state.study_saved
+        if saved:
+            n = len(saved["sections"])
+            if st.button(f"Continue “{saved['name']}” — section {saved['idx'] + 1} of {n}",
+                         key="study_resume", icon=":material/play_arrow:", type="primary"):
+                st.session_state.study = dict(saved, qa={})
+                st.session_state.study_autoread = False
+                st.rerun()
+        if st.session_state.get("last_pdf"):
+            name = st.session_state.last_pdf["name"]
+            if st.button(f"Study “{name}” (the PDF you sent)", key="study_last_pdf",
+                         icon=":material/description:"):
+                load_study_pdf(name, st.session_state.last_pdf["data"])
+                st.rerun()
+        up = st.file_uploader("Add a PDF to study", type=["pdf"], key="study_upload")
+        if up is not None:
+            load_study_pdf(up.name, up.getvalue())
+            if st.session_state.study:
+                st.rerun()
+        if st.button("Back to chat", key="study_back_chat", type="tertiary",
+                     icon=":material/arrow_back:"):
+            st.session_state.study_on = False
+            st.rerun()
+        return
+
+    sections = s["sections"]
+    idx = s["idx"]
+    sec = sections[idx]
+    n = len(sections)
+
+    st.markdown(f'<div class="troy-study-doc">📘 {html.escape(s["name"])}</div>',
+                unsafe_allow_html=True)
+    st.progress((idx + 1) / n, text=f"Section {idx + 1} of {n}")
+    if sec.get("group"):
+        st.markdown(f'<div class="troy-study-group">{html.escape(sec["group"])}</div>',
+                    unsafe_allow_html=True)
+    st.markdown(f'<div class="troy-study-title">{html.escape(section_label(sec))}</div>',
+                unsafe_allow_html=True)
+
+    speed = st.segmented_control(
+        "Reading speed", ["0.8×", "1×", "1.2×", "1.5×"], default="1×",
+        key="read_speed", label_visibility="collapsed",
+    ) or "1×"
+    rate = float(speed.rstrip("×"))
+    autoplay = st.session_state.pop("study_autoread", False) and auto_speak
+    read_along(sec, autoplay, rate)
+
+    nav = st.container(horizontal=True, key="study_nav", gap="small")
+    if nav.button("Back", key="study_prev", icon=":material/skip_previous:", disabled=idx == 0):
+        go_to_section(idx - 1)
+        st.rerun()
+    if nav.button("Read again", key="study_again", icon=":material/replay:"):
+        st.session_state.study_autoread = True
+        st.rerun()
+    if nav.button("Stop", key="study_stop", icon=":material/stop:"):
+        st.html("<script>window.troyAudio && window.troyAudio.stop();"
+                "window.speechSynthesis && speechSynthesis.cancel();</script>",
+                unsafe_allow_javascript=True)
+    if nav.button("Next", key="study_next", icon=":material/skip_next:",
+                  type="primary", disabled=idx >= n - 1):
+        go_to_section(idx + 1)
+        st.rerun()
+
+    st.markdown('<div class="troy-study-label">Need help with this part?</div>',
+                unsafe_allow_html=True)
+    helprow = st.container(horizontal=True, key="study_help", gap="small")
+    action = None
+    if helprow.button("Quiz me", key="study_quiz", icon=":material/quiz:"):
+        action = ("quiz", None)
+    if helprow.button("Explain it", key="study_explain", icon=":material/lightbulb:"):
+        action = ("explain", None)
+    style_row = st.container(horizontal=True, key="study_styles", gap="small")
+    for key, (label, _) in STUDY_STYLES.items():
+        if style_row.button(label, key=f"study_style_{key}"):
+            action = ("style", key)
+
+    if action:
+        kind, key = action
+        try:
+            with st.spinner("Troy is thinking..."):
+                if kind == "quiz":
+                    raw = ask_brain_once(
+                        "Make ONE quiz question about this section. Pick at random between "
+                        "true/false and multiple choice (3 choices). Reply with only JSON: "
+                        '{"question": "...", "choices": ["..."], "answer_index": 0, '
+                        '"why": "one sentence pointing to what the section says"}',
+                        section_for_brain(sec), max_tokens=400)
+                    quiz = parse_quiz(raw)
+                    add_study_answer("quiz", "Quiz me", "", quiz=quiz)
+                elif kind == "explain":
+                    ans = ask_brain_once(
+                        "Explain this section in plain English in under 150 words: what it "
+                        "means and what it looks like on the job.", section_for_brain(sec))
+                    add_study_answer("explain", "Explain it", ans)
+                else:
+                    label, instruction = STUDY_STYLES[key]
+                    ans = ask_brain_once(instruction, section_for_brain(sec), max_tokens=900)
+                    add_study_answer("style", label, ans)
+        except Exception as e:
+            add_study_answer("error", "", explain_error(e))
+        st.rerun()
+
+    # Answers for this section
+    for j, item in enumerate(s["qa"].get(str(idx), [])):
+        with st.chat_message("assistant"):
+            if item["kind"] == "quiz" and item.get("quiz"):
+                qz = item["quiz"]
+                st.markdown(f"**Quiz:** {qz['question']}")
+                if qz["picked"] is None:
+                    row = st.container(horizontal=True, key=f"quizrow_{idx}_{j}", gap="small")
+                    for c_i, choice in enumerate(qz["choices"]):
+                        if row.button(choice, key=f"quiz_{idx}_{j}_{c_i}"):
+                            qz["picked"] = c_i
+                            right = c_i == qz["answer"]
+                            verdict = ("✅ That's right. " if right else
+                                       f"❌ Not quite — it's “{qz['choices'][qz['answer']]}”. ")
+                            item["a"] = verdict + qz["why"]
+                            item["autoplay"] = auto_speak
+                            if (auto_speak and use_human_voice and api_key
+                                    and not st.session_state.get("tts_off_today")):
+                                tmp = {"text": item["a"]}
+                                make_voice(tmp)
+                                item.update({k: tmp[k] for k in ("audio", "voice_note") if k in tmp})
+                            st.rerun()
+                if item["a"]:
+                    st.write(item["a"])
+            else:
+                if item["q"] and item["kind"] in ("ask",):
+                    st.caption(f"You asked: {item['q']}")
+                elif item["q"]:
+                    st.caption(item["q"])
+                st.write(item["a"])
+            if item["a"]:
+                ap = item.pop("autoplay", False) and auto_speak
+                if item.get("audio"):
+                    st.audio(item["audio"], format="audio/wav")
+                    if ap:
+                        play_voice(item["audio"])
+                else:
+                    if item.get("voice_note"):
+                        st.caption(item["voice_note"])
+                    speak_reply(item["a"], autoplay=ap)
+
+    if st.button("Close this PDF", key="study_close", type="tertiary", icon=":material/close:"):
+        st.session_state.study = None
+        st.rerun()
+
+
+def ask_study_question(question):
+    s = st.session_state.study
+    sec = s["sections"][s["idx"]]
+    recent = s["qa"].get(str(s["idx"]), [])[-3:]
+    earlier = "\n".join(f"Paul: {i['q']}\nTroy: {i['a']}" for i in recent if i["kind"] == "ask")
+    task = (("Earlier questions about this section:\n" + earlier + "\n\n") if earlier else "") + \
+        f"Paul asks: {question}\nAnswer from the section. If he asks about a word or a " \
+        "sentence, explain it simply."
+    try:
+        with st.spinner("Troy is thinking..."):
+            ans = ask_brain_once(task, section_for_brain(sec))
+        add_study_answer("ask", question, ans)
+    except Exception as e:
+        add_study_answer("error", question, explain_error(e))
+
+
+if st.session_state.study_on:
+    render_study()
+
+if st.session_state.study_on and (prompt or send_voice or attached):
+    pdfs = [f for f in attached if (f.name or "").lower().endswith(".pdf")]
+    if not brain and not pdfs:
+        st.warning("Add Troy's Claude key (or a Gemini key) in the sidebar first, then try again.")
+    elif pdfs:
+        load_study_pdf(pdfs[0].name, pdfs[0].getvalue())
+        st.rerun()
+    elif not st.session_state.study:
+        st.warning("Add a PDF first: tap ＋ or use “Add a PDF to study”.")
+    elif send_voice:
+        try:
+            with st.spinner("Listening..."):
+                words = transcribe(voice_audio.getvalue(), voice_audio.type or "audio/wav")
+            ask_study_question(((prompt + " ") if prompt else "") + words)
+            st.rerun()
+        except Exception:
+            st.warning("Troy couldn't make out that recording. Try again, or tap the 🎤 on "
+                       "your keyboard and talk — it types for you.")
+    else:
+        ask_study_question(prompt)
+        st.session_state.hide_keyboard = True
+        st.rerun()
+elif prompt or send_voice or ask_about_files:
     parts, problem = file_parts(attached)
     if not brain:
         st.warning("Add Troy's Claude key (or a Gemini key) in the sidebar first, then try again.")
