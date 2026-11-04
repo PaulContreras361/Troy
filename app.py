@@ -23,7 +23,7 @@ def speak_reply(text, autoplay=False):
             const readButton = container.querySelector(".read-aloud");
             const stopButton = container.querySelector(".stop-speaking");
             function speak() {{
-                if (!("speechSynthesis" in window)) {{
+                if (!window.speechSynthesis) {{
                     readButton.textContent = "Speech is not supported in this browser";
                     return;
                 }}
@@ -33,7 +33,7 @@ def speak_reply(text, autoplay=False):
             }}
             readButton.addEventListener("click", speak);
             stopButton.addEventListener("click", () => {{
-                if ("speechSynthesis" in window) {{
+                if (window.speechSynthesis) {{
                     window.speechSynthesis.cancel();
                 }}
             }});
