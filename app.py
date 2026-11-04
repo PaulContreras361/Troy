@@ -1,3 +1,4 @@
+import base64
 import html
 import io
 import os
@@ -93,6 +94,63 @@ def human_voice(client, text, voice_name):
     raise ValueError("no audio returned")
 
 
+# iPhone Safari only lets a page make sound if a tap started it. Troy's voice
+# arrives seconds after you hit send, so Safari blocks it. Fix: on your first tap
+# anywhere, "unlock" one audio player and keep it for the whole visit; every
+# reply after that plays through it with no extra tap.
+SPEAKER_JS = """
+<script>
+(() => {
+  if (window.troyAudio) return;
+  // Play even when the iPhone ringer switch is on silent (Safari 17+).
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+  const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+  const A = window.troyAudio = { el: new Audio(), unlocked: false, url: null };
+  A.el.setAttribute("playsinline", "");
+  function unlock() {
+    if (A.unlocked) return;
+    A.unlocked = true;
+    A.el.src = SILENT;
+    A.el.play().catch(() => { A.unlocked = false; });
+    if (window.speechSynthesis) {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    }
+  }
+  ["touchend", "click", "keydown"].forEach(e =>
+    document.addEventListener(e, unlock, { capture: true }));
+  A.stop = () => {
+    try { A.el.pause(); } catch (e) {}
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  };
+  A.play = (b64) => {
+    A.stop();
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    if (A.url) URL.revokeObjectURL(A.url);
+    A.url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+    A.el.src = A.url;
+    return A.el.play();
+  };
+})();
+</script>
+"""
+
+
+def play_voice(wav_bytes):
+    """Play Troy's voice right away through the unlocked player."""
+    b64 = base64.b64encode(wav_bytes).decode("ascii")
+    st.html(
+        f"""<script>
+        (() => {{
+          const A = window.troyAudio;
+          if (A) A.play("{b64}").catch(() => {{}});
+        }})();
+        </script>""",
+        unsafe_allow_javascript=True,
+    )
+
+
 def speak_reply(text, autoplay=False):
     container_id = f"troy-speech-{uuid4().hex}"
     safe_text = html.escape(speech_text(text))
@@ -148,9 +206,8 @@ def speak_reply(text, autoplay=False):
             }}
             readButton.addEventListener("click", speak);
             stopButton.addEventListener("click", () => {{
-                if (window.speechSynthesis) {{
-                    window.speechSynthesis.cancel();
-                }}
+                if (window.troyAudio) window.troyAudio.stop();
+                else if (window.speechSynthesis) window.speechSynthesis.cancel();
             }});
             {start_speech}
         }})();
@@ -270,7 +327,29 @@ except Exception:
 
 st.sidebar.title("TROY")
 st.sidebar.write("Prototype v0.2")
-auto_speak = st.sidebar.checkbox("Automatically read Troy's replies aloud", value=True)
+st.html(SPEAKER_JS, unsafe_allow_javascript=True)
+auto_speak = st.toggle(
+    "🔊 Troy speaks out loud", value=True, key="voice_on",
+    help="On: Troy reads every reply aloud by himself. Off: he stays quiet.",
+)
+# One page helper, drawn on EVERY run so the layout never shifts. (If it only
+# appeared sometimes, Streamlit would think the attach panel was new and close it.)
+page_jobs = []
+if st.session_state.pop("hide_keyboard", False):
+    # Like Claude: after you send, put the phone keyboard away so you can read.
+    page_jobs.append(
+        """const hide = () => {
+             const el = document.activeElement;
+             if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) el.blur();
+           };
+           [0, 150, 600].forEach(ms => setTimeout(hide, ms));"""
+    )
+if not auto_speak:
+    page_jobs.append("window.troyAudio && window.troyAudio.stop();")
+st.html(
+    "<script>(() => {" + "\n".join(page_jobs) + "})();</script>",
+    unsafe_allow_javascript=True,
+)
 use_human_voice = st.sidebar.checkbox(
     "Human voice (Gemini)",
     value=True,
@@ -311,14 +390,36 @@ st.sidebar.write("File uploads: on (PDF, photos, text)")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+def make_voice(msg):
+    """Fill in msg['audio'], or a note saying why the device voice is used."""
+    try:
+        with st.spinner("Troy is getting his voice ready..."):
+            msg["audio"] = human_voice(
+                st.session_state.client, msg["text"], TTS_VOICES[voice_label]
+            )
+    except Exception as e:
+        if getattr(e, "code", None) == 429:
+            # Voice allowance used up: stop trying for the rest of this visit.
+            st.session_state.tts_off_today = True
+            msg["voice_note"] = "Human voice used up for today — using your device's voice."
+        else:
+            msg["voice_note"] = (
+                f"Human voice unavailable ({type(e).__name__}) — using your device's voice."
+            )
+
+
 # ---- Show the conversation so far ----
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["text"])
         if msg["role"] == "assistant":
-            autoplay = msg.pop("autoplay", False)
+            autoplay = msg.pop("autoplay", False) and auto_speak
+            if msg.pop("pending_voice", False):
+                make_voice(msg)
             if msg.get("audio"):
-                st.audio(msg["audio"], format="audio/wav", autoplay=autoplay)
+                st.audio(msg["audio"], format="audio/wav")
+                if autoplay:
+                    play_voice(msg["audio"])
             else:
                 if msg.get("voice_note"):
                     st.caption(msg["voice_note"])
@@ -379,6 +480,7 @@ def file_label(files):
 
 def send_to_troy(user_text, message):
     st.session_state.messages.append({"role": "user", "text": user_text})
+    st.session_state.hide_keyboard = True
     try:
         response = st.session_state.chat.send_message(message)
         answer = response.text
@@ -389,22 +491,11 @@ def send_to_troy(user_text, message):
         answer = explain_error(e)
         ok = False
     reply = {"role": "assistant", "text": answer, "autoplay": auto_speak}
-    if ok and use_human_voice and not st.session_state.get("tts_off_today"):
-        try:
-            with st.spinner("Troy is getting his voice ready..."):
-                reply["audio"] = human_voice(
-                    st.session_state.client, answer, TTS_VOICES[voice_label]
-                )
-        except Exception as e:
-            if getattr(e, "code", None) == 429:
-                # Voice allowance used up: stop trying for the rest of this visit.
-                st.session_state.tts_off_today = True
-                reply["voice_note"] = "Human voice used up for today — using your device's voice."
-            else:
-                reply["voice_note"] = (
-                    f"Human voice unavailable ({type(e).__name__}) — using your device's voice."
-                )
+    if ok and auto_speak and use_human_voice and not st.session_state.get("tts_off_today"):
+        # Show the text now; the voice is made right after it appears.
+        reply["pending_voice"] = True
     st.session_state.messages.append(reply)
+
 
 
 if prompt or send_voice or ask_about_files:
