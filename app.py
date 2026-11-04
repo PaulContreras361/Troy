@@ -275,8 +275,36 @@ st.markdown(
         letter-spacing: 0.25em;
         font-size: 0.85rem;
     }
-    .troy-mark-small {
-        margin-bottom: 0.75rem;
+    .troy-topbar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.25rem;
+    }
+    .troy-menu {
+        width: 44px;
+        height: 44px;
+        display: inline-flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 5px;
+        border: 1px solid rgba(128, 128, 128, 0.35);
+        border-radius: 12px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        padding: 0;
+    }
+    .troy-menu span {
+        display: block;
+        width: 20px;
+        height: 2px;
+        border-radius: 2px;
+        background: currentColor;
+    }
+    .troy-menu:active {
+        opacity: 0.6;
     }
 
     @media (max-width: 640px) {
@@ -314,16 +342,45 @@ def greeting():
     return "Good evening, Paul"
 
 
+# ☰ menu button, like Claude's. Streamlit's own sidebar arrow is tiny and on
+# iPhone it hides under Safari's address bar, so this opens the sidebar instead.
+MENU_BUTTON = """
+<button class="troy-menu" type="button" aria-label="Open menu">
+  <span></span><span></span><span></span>
+</button>
+<script>
+(() => {
+  document.querySelectorAll(".troy-menu").forEach(btn => {
+    if (btn.dataset.ready) return;
+    btn.dataset.ready = "1";
+    btn.addEventListener("click", () => {
+      const open = document.querySelector(
+        '[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"] button');
+      if (open) { open.click(); return; }
+      // Sidebar already open: close it.
+      const close = document.querySelector(
+        '[data-testid="stSidebarCollapseButton"] button, [data-testid="stSidebarHeader"] button');
+      if (close) close.click();
+    });
+  });
+})();
+</script>
+"""
 if not st.session_state.get("messages"):
-    st.markdown(
-        f'''<div class="troy-welcome">
+    st.html(
+        MENU_BUTTON
+        + f'''<div class="troy-welcome">
             <div class="troy-mark">TROY</div>
             <h1>{greeting()}</h1>
         </div>''',
-        unsafe_allow_html=True,
+        unsafe_allow_javascript=True,
     )
 else:
-    st.markdown('<div class="troy-mark troy-mark-small">TROY</div>', unsafe_allow_html=True)
+    st.html(
+        '<div class="troy-topbar">' + MENU_BUTTON
+        + '<div class="troy-mark">TROY</div></div>',
+        unsafe_allow_javascript=True,
+    )
 
 # ---- Find Troy's key ----
 # 1. Streamlit Secret (used when deployed on Streamlit Cloud)
