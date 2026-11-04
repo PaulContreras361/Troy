@@ -134,6 +134,24 @@ SPEAKER_JS = """
   }
   ["touchend", "click", "keydown"].forEach(e =>
     document.addEventListener(e, unlock, { capture: true }));
+  // iPhone Safari has two toolbar modes. Solid: Troy's page ends above it.
+  // See-through (after scrolling): Troy's page runs underneath it and the
+  // message box gets covered. Troy's page is then almost as tall as the
+  // screen, so lift the box clear of the toolbar and Streamlit's badges.
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  function fitBox() {
+    let lift = 0;
+    if (isIOS && screen.height) {
+      const tall = window.innerHeight / screen.height;
+      if (tall > 0.86) lift = 76;
+    }
+    document.documentElement.style.setProperty("--troy-lift", lift + "px");
+  }
+  fitBox();
+  window.addEventListener("resize", fitBox);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", fitBox);
+  setInterval(fitBox, 1000);
   A.stop = () => {
     try { A.el.pause(); } catch (e) {}
     if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -335,7 +353,8 @@ st.markdown(
     /* Lift the box itself (the outer frame didn't move on Streamlit Cloud).
        1.5rem keeps it just above the two badges. */
     [data-testid="stChatInput"] {
-        margin-bottom: calc(0.5rem + env(safe-area-inset-bottom)) !important;
+        margin-bottom: calc(0.5rem + var(--troy-lift, 0px) + env(safe-area-inset-bottom)) !important;
+        transition: margin-bottom 0.2s ease;
     }
     [data-testid="stChatInput"] {
         border-radius: 1.6rem !important;
@@ -1333,6 +1352,8 @@ def render_study():
         st.markdown("### 📘 Study a PDF")
         st.caption("Troy reads it to you section by section while you follow along. "
                    "Tap Quiz me or Explain, or ask him anything about it.")
+        st.caption("Add the PDF with Upload below or the ＋ in the message box. "
+                   "Use the mic or type to ask Troy questions while you study.")
         saved = st.session_state.study_saved
         if saved:
             n = len(saved["sections"])
