@@ -330,8 +330,10 @@ st.markdown(
     /* Streamlit Cloud puts its own badges (your profile picture and the red
        "Hosted with Streamlit" crown) in the bottom-right corner, outside Troy,
        where Troy can't hide them. Lift the message box above them. */
-    [data-testid="stBottomBlockContainer"] {
-        padding-bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;
+    /* Lift the box itself (the outer frame didn't move on Streamlit Cloud).
+       5.5rem clears Safari's floating toolbar plus the two badges. */
+    [data-testid="stChatInput"] {
+        margin-bottom: calc(5.5rem + env(safe-area-inset-bottom)) !important;
     }
     [data-testid="stChatInput"] {
         border-radius: 1.6rem !important;
