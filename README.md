@@ -69,6 +69,14 @@ GEMINI_API_KEY = "your-api-key"
 
 Do not commit your actual `secrets.toml` to the repository. Check the deployment's access settings before sharing its URL or entering sensitive information. Chat history is kept only in the current browser session and is not synced between devices.
 
+## Security
+
+- Troy limits prompts to 8,000 characters and recordings/uploads to 10 MB.
+- Keep the Gemini key in Streamlit secrets or an environment variable; never put real keys in source code or commit them.
+- Restrict access to deployed apps that use private credentials. Use HTTPS and keep your host and dependencies updated.
+- Troy can help with defensive security and authorized assessments, but will not assist with unauthorized access, credential theft, malware, or evasion.
+- These safeguards reduce common risks but cannot guarantee that an app or device will never be compromised. Do not submit passwords, API keys, or other sensitive information in chat.
+
 ## Usage
 
 - Ask Troy about a topic, request a step-by-step explanation, or ask for practice questions.
