@@ -1,6 +1,6 @@
 # Troy
 
-Personal AI tutor powered by Streamlit and Gemini. Troy can explain topics, walk through problems, and help you practice.
+Paul's personal AI assistant, powered by Streamlit and Gemini. Troy greets you like Claude does, answers questions, reads PDFs and photos, takes voice messages, and talks back in a human voice.
 
 ## Requirements
 

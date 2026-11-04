@@ -3,6 +3,8 @@ import io
 import os
 import re
 import wave
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 import streamlit as st
@@ -158,19 +160,18 @@ def speak_reply(text, autoplay=False):
     )
 
 
-TUTOR_INSTRUCTIONS = """
-You are Troy, a patient, encouraging tutor who can help the learner explore any subject.
-Adapt explanations to the learner's apparent level, and ask what level they prefer when
-that would help. Explain ideas clearly in manageable steps, use relevant examples or
-analogies, and distinguish established facts from uncertainty. Help the learner build
-understanding rather than only giving answers: offer a useful follow-up question or a
-small practice activity when appropriate, without forcing a quiz into every reply.
+TROY_INSTRUCTIONS = """
+You are Troy, Paul's personal AI assistant. Be warm, direct, and genuinely helpful, the way
+a capable friend would be. Answer what Paul actually asks and get to the point; don't open
+by asking what he wants to learn or turn replies into lessons or quizzes unless he asks to be
+taught. When he does want to learn something, explain it clearly in plain English, step by
+step, with examples, and distinguish established facts from uncertainty.
 For high-stakes medical, legal, financial, or safety topics, give general educational
 information and encourage checking important decisions with a qualified professional.
-For cybersecurity topics, prioritize defending systems the learner owns or is authorized
+For cybersecurity topics, prioritize defending systems Paul owns or is authorized
 to assess. Do not assist with unauthorized access, credential theft, malware, or evasion.
-The learner can attach PDFs, photos, and text files to a message. When files are attached,
-read them and use what is in them in your answer. Never tell the learner you can't read
+Paul can attach PDFs, photos, and text files to a message. When files are attached,
+read them and use what is in them in your answer. Never tell Paul you can't read
 attached files.
 """
 
@@ -189,6 +190,28 @@ st.markdown(
         border-radius: 0.75rem;
     }
 
+    .troy-welcome {
+        text-align: center;
+        margin: 2.5rem 0 2rem;
+    }
+    .troy-welcome h1 {
+        font-family: Georgia, "Times New Roman", serif;
+        font-weight: 400;
+        font-size: 2.4rem;
+        line-height: 1.2;
+        margin: 0.4rem 0 0;
+        padding: 0;
+    }
+    .troy-mark {
+        color: #0ea5a4;
+        font-weight: 700;
+        letter-spacing: 0.25em;
+        font-size: 0.85rem;
+    }
+    .troy-mark-small {
+        margin-bottom: 0.75rem;
+    }
+
     @media (max-width: 640px) {
         .block-container {
             padding: 3.5rem 0.75rem calc(5rem + env(safe-area-inset-bottom));
@@ -201,15 +224,39 @@ st.markdown(
         [data-testid="stChatInput"] textarea {
             font-size: 16px;
         }
+
+        .troy-welcome h1 {
+            font-size: 2rem;
+        }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("TROY")
-st.subheader("Your personal AI tutor")
-st.write("Ask Troy to explain a topic, walk through a problem, or help you practice a new skill.")
+# ---- Welcome, like Claude: greet Paul by time of day until the chat starts ----
+def greeting():
+    try:
+        now = datetime.now(ZoneInfo("America/Chicago"))
+    except Exception:  # no time-zone data on this computer
+        now = datetime.now(timezone(timedelta(hours=-6)))
+    if 5 <= now.hour < 12:
+        return "Good morning, Paul"
+    if 12 <= now.hour < 17:
+        return "Good afternoon, Paul"
+    return "Good evening, Paul"
+
+
+if not st.session_state.get("messages"):
+    st.markdown(
+        f'''<div class="troy-welcome">
+            <div class="troy-mark">TROY</div>
+            <h1>{greeting()}</h1>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown('<div class="troy-mark troy-mark-small">TROY</div>', unsafe_allow_html=True)
 
 # ---- Find Troy's key ----
 # 1. Streamlit Secret (used when deployed on Streamlit Cloud)
@@ -247,7 +294,7 @@ if api_key:
         st.session_state.chat = st.session_state.client.chats.create(
             model="gemini-2.5-flash",
             config=genai.types.GenerateContentConfig(
-                system_instruction=TUTOR_INSTRUCTIONS,
+                system_instruction=TROY_INSTRUCTIONS,
             ),
         )
         st.session_state.key = api_key
@@ -277,7 +324,7 @@ for msg in st.session_state.messages:
                     st.caption(msg["voice_note"])
                 speak_reply(msg["text"], autoplay=autoplay)
 
-prompt = st.chat_input("What would you like to learn?", max_chars=MAX_PROMPT_CHARS)
+prompt = st.chat_input("How can I help you today?", max_chars=MAX_PROMPT_CHARS)
 if "voice_key" not in st.session_state:
     st.session_state.voice_key = 0
 voice_audio = st.audio_input(
@@ -378,7 +425,7 @@ if prompt or send_voice or ask_about_files:
             send_to_troy(
                 "🎤 Voice message" + file_label(attached),
                 parts
-                + [audio_part, "This is the learner's voice message. Reply to what they said."],
+                + [audio_part, "This is Paul's voice message. Reply to what they said."],
             )
             # New keys = fresh recorder and uploader, so nothing is sent twice.
             st.session_state.voice_key += 1
