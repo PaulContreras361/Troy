@@ -92,7 +92,7 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 - **Better device voice on iPhone:** Settings → Accessibility → Spoken Content → Voices → English → download a **Premium** or **Enhanced** voice (e.g. Ava or Evan). Troy picks it automatically.
 - **Brain:** Claude (Haiku 5.5 by default; Sonnet 5.5 in the sidebar). No daily limit — each message is paid from your Claude Console credits (Haiku costs a small fraction of a cent per message). If credits run out, Troy says so. Without a Claude key, Troy falls back to Gemini's free tier (20 messages a day).
 - **Voice:** Gemini (free) makes Troy's human voice and writes down your voice messages for Claude.
-- **Keys:** on Streamlit Cloud, put `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` in the app's Secrets. Locally, use the sidebar boxes or `setx`.
+- **Keys:** easiest — paste them once in ☰ → Settings with **Remember keys on this phone** ticked; Troy fills them in every time on that phone (saved in that browser only; **Forget saved keys** removes them). Or put `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` in the app's Streamlit Secrets (works on every device and takes priority).
 - The app uses Gemini 2.5 Flash.
 - Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.
 - Voice recording requires microphone permission and browser support; spoken replies use your browser's text-to-speech voices and may be restricted by browser autoplay settings.

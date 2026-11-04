@@ -605,6 +605,7 @@ for name, start in (
     ("messages", []), ("claude_history", []), ("chats", {}), ("chat_id", None),
     ("store_loaded", False), ("save_payload", ""), ("save_rev", ""),
     ("study_on", False), ("study", None), ("study_saved", None),
+    ("saved_keys", {}), ("keys_payload", ""), ("keys_rev", ""),
 ):
     if name not in st.session_state:
         st.session_state[name] = start
@@ -617,15 +618,19 @@ STORE_JS = """
 export default function(component) {
   const { data, setTriggerValue } = component;
   const KEY = "troy_chats_v1";
+  const KEYS = "troy_keys_v1";   // API keys Paul chose to remember on this phone
   if (!data) return;
   if (data.save_rev && window.__troySavedRev !== data.save_rev) {
     try { localStorage.setItem(KEY, data.save); window.__troySavedRev = data.save_rev; } catch (e) {}
   }
+  if (data.keys_rev && window.__troyKeysRev !== data.keys_rev) {
+    try { localStorage.setItem(KEYS, data.keys); window.__troyKeysRev = data.keys_rev; } catch (e) {}
+  }
   if (data.load_token && window.__troyLoadToken !== data.load_token) {
     window.__troyLoadToken = data.load_token;
-    let raw = null;
-    try { raw = localStorage.getItem(KEY); } catch (e) {}
-    setTriggerValue("loaded", raw || "{}");
+    let raw = null, keys = null;
+    try { raw = localStorage.getItem(KEY); keys = localStorage.getItem(KEYS); } catch (e) {}
+    setTriggerValue("loaded", JSON.stringify({ store: raw || "{}", keys: keys || "{}" }));
   }
 }
 """
@@ -725,6 +730,8 @@ with st.sidebar:
             "load_token": "" if st.session_state.store_loaded else st.session_state.load_token,
             "save": st.session_state.save_payload,
             "save_rev": st.session_state.save_rev,
+            "keys": st.session_state.keys_payload,
+            "keys_rev": st.session_state.keys_rev,
         },
         key="troy_store",
         on_loaded_change=lambda: None,
@@ -735,6 +742,18 @@ with st.sidebar:
             saved = json.loads(store.loaded) or {}
         except Exception:
             saved = {}
+        if isinstance(saved, dict) and set(saved) == {"store", "keys"}:
+            try:
+                keys = json.loads(saved["keys"]) or {}
+                st.session_state.saved_keys = {
+                    k: v for k, v in keys.items() if k in ("claude", "gemini") and v
+                }
+            except Exception:
+                pass
+            try:
+                saved = json.loads(saved["store"]) or {}
+            except Exception:
+                saved = {}
         if isinstance(saved, dict) and saved.get("v") == 2:
             if saved.get("study") and not st.session_state.study_saved:
                 st.session_state.study_saved = saved["study"]
@@ -769,10 +788,49 @@ with st.sidebar:
         voice_label = st.selectbox(
             "Troy's voice", list(TTS_VOICES), disabled=not use_human_voice
         )
+        # Keys remembered on this phone fill in when Secrets don't have them.
+        phone_keys = st.session_state.saved_keys
+        from_phone = []
+        if not claude_key and phone_keys.get("claude"):
+            claude_key = phone_keys["claude"]
+            from_phone.append("Claude")
+        if not api_key and phone_keys.get("gemini"):
+            api_key = phone_keys["gemini"]
+            from_phone.append("Gemini")
+        typed = {}
         if not claude_key:
-            claude_key = st.text_input("Paste your Claude API key:", type="password")
+            typed["claude"] = st.text_input("Paste your Claude API key:", type="password",
+                                            key="type_claude_key").strip()
+            claude_key = typed["claude"]
         if not api_key:
-            api_key = st.text_input("Paste your free Gemini key (voice):", type="password")
+            typed["gemini"] = st.text_input("Paste your free Gemini key (voice):",
+                                            type="password", key="type_gemini_key").strip()
+            api_key = typed["gemini"]
+        if typed:
+            remember = st.checkbox("Remember keys on this phone", value=True, key="remember_keys",
+                                   help="Saved in this phone's browser only, so you don't "
+                                   "have to paste them again.")
+            good = {k: v for k, v in typed.items() if v}
+            bad = [k for k, v in good.items()
+                   if (k == "claude" and not v.startswith("sk-ant-"))
+                   or (k == "gemini" and not v.startswith("AIza"))]
+            if bad:
+                st.warning("That doesn't look like a " + " / ".join(
+                    "Claude key (starts with sk-ant-)" if k == "claude" else
+                    "Gemini key (starts with AIza)" for k in bad) + ".")
+            elif remember and good and st.session_state.store_loaded:
+                st.session_state.saved_keys = {**phone_keys, **good}
+                st.session_state.keys_payload = json.dumps(st.session_state.saved_keys)
+                st.session_state.keys_rev = uuid4().hex
+                st.rerun()
+        if from_phone:
+            st.caption("🔑 " + " and ".join(from_phone) + " key saved on this phone.")
+            if st.button("Forget saved keys", key="forget_keys", type="tertiary",
+                         icon=":material/key_off:"):
+                st.session_state.saved_keys = {}
+                st.session_state.keys_payload = "{}"
+                st.session_state.keys_rev = uuid4().hex
+                st.rerun()
         brain = "claude" if claude_key else ("gemini" if api_key else None)
         claude_model = CLAUDE_MODELS[
             st.selectbox("Troy's brain", list(CLAUDE_MODELS), disabled=brain != "claude")
