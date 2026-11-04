@@ -88,7 +88,9 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 - **Keyboard:** after you send, the phone keyboard closes so you can read the reply.
 - **Human voice:** Troy speaks his replies in a natural Gemini voice (sidebar: **Human voice (Gemini)** and **Troy's voice**). It's free but uses one extra Gemini call per reply on the voice model's own daily allowance. If that runs out or fails, Troy says so and uses your device's best voice instead.
 - **Better device voice on iPhone:** Settings → Accessibility → Spoken Content → Voices → English → download a **Premium** or **Enhanced** voice (e.g. Ava or Evan). Troy picks it automatically.
-- Use the sidebar to add a Gemini API key.
+- **Brain:** Claude (Haiku 5.5 by default; Sonnet 5.5 in the sidebar). No daily limit — each message is paid from your Claude Console credits (Haiku costs a small fraction of a cent per message). If credits run out, Troy says so. Without a Claude key, Troy falls back to Gemini's free tier (20 messages a day).
+- **Voice:** Gemini (free) makes Troy's human voice and writes down your voice messages for Claude.
+- **Keys:** on Streamlit Cloud, put `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` in the app's Secrets. Locally, use the sidebar boxes or `setx`.
 - The app uses Gemini 2.5 Flash.
 - Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.
 - Voice recording requires microphone permission and browser support; spoken replies use your browser's text-to-speech voices and may be restricted by browser autoplay settings.

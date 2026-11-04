@@ -8,23 +8,33 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
+import anthropic
 import streamlit as st
 from google import genai
+from PIL import Image
 
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_FILES = 5
 
-# File types Troy can read, and the type name Gemini expects for each.
+# Claude models Troy can use (paid from Paul's Claude Console credits).
+CLAUDE_MODELS = {
+    "Claude Haiku 5.5 — fast, cheapest": "claude-haiku-5-5",
+    "Claude Sonnet 5.5 — smarter, ~20x the cost": "claude-sonnet-5-5",
+}
+CLAUDE_MAX_REPLY_TOKENS = 4_096
+HISTORY_MESSAGES = 24       # how many past messages Claude sees
+FILE_MEMORY_MESSAGES = 6    # files stay attached for this many recent messages
+
+# File types Troy can read. HEIC is left out on purpose: then the iPhone hands
+# over photos as JPEG, which both Claude and Gemini can read.
 FILE_TYPES = {
     "pdf": "application/pdf",
     "png": "image/png",
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "webp": "image/webp",
-    "heic": "image/heic",
-    "heif": "image/heif",
     "txt": "text/plain",
     "md": "text/plain",
     "csv": "text/csv",
@@ -360,27 +370,46 @@ voice_label = st.sidebar.selectbox(
     "Troy's voice", list(TTS_VOICES), disabled=not use_human_voice
 )
 
+# ---- Claude key (Troy's brain, no daily limit) ----
+claude_key = ""
+try:
+    claude_key = st.secrets["ANTHROPIC_API_KEY"]
+except Exception:
+    claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
+if not claude_key:
+    claude_key = st.sidebar.text_input("Paste your Claude API key:", type="password")
 if not api_key:
-    api_key = st.sidebar.text_input("Paste your free Gemini key:", type="password")
+    api_key = st.sidebar.text_input(
+        "Paste your free Gemini key (voice):", type="password"
+    )
 
-# ---- Wake the brain up once we have a key ----
-if api_key:
-    if "chat" not in st.session_state or st.session_state.get("key") != api_key:
-        # Keep the client in session_state. If it is a throwaway variable,
-        # Python deletes it after this run and the chat fails with
-        # "client has been closed" on the next message.
-        st.session_state.client = genai.Client(api_key=api_key)
-        st.session_state.chat = st.session_state.client.chats.create(
-            model="gemini-2.5-flash",
-            config=genai.types.GenerateContentConfig(
-                system_instruction=TROY_INSTRUCTIONS,
-            ),
-        )
-        st.session_state.key = api_key
-        st.session_state.messages = []
-    st.sidebar.write("AI brain: ON")
+brain = "claude" if claude_key else ("gemini" if api_key else None)
+claude_model = CLAUDE_MODELS[
+    st.sidebar.selectbox("Troy's brain", list(CLAUDE_MODELS), disabled=brain != "claude")
+]
+
+# Keep clients in session_state. If they are throwaway variables, Python
+# deletes them after this run and the chat fails with "client has been closed".
+if claude_key and st.session_state.get("claude_key") != claude_key:
+    st.session_state.claude = anthropic.Anthropic(api_key=claude_key)
+    st.session_state.claude_key = claude_key
+if api_key and st.session_state.get("key") != api_key:
+    st.session_state.client = genai.Client(api_key=api_key)
+    st.session_state.chat = st.session_state.client.chats.create(
+        model="gemini-2.5-flash",
+        config=genai.types.GenerateContentConfig(
+            system_instruction=TROY_INSTRUCTIONS,
+        ),
+    )
+    st.session_state.key = api_key
+
+if brain == "claude":
+    st.sidebar.write("AI brain: Claude — no daily limit (uses your Console credits)")
+elif brain == "gemini":
+    st.sidebar.write("AI brain: Gemini free tier (20 messages a day)")
 else:
-    st.sidebar.write("AI brain: waiting for key")
+    st.sidebar.write("AI brain: waiting for a key")
+st.sidebar.write("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
 
 st.sidebar.write("Chat: on")
 st.sidebar.write("Memory: on (this session)")
@@ -389,6 +418,8 @@ st.sidebar.write("File uploads: on (PDF, photos, text)")
 # Make sure the history list exists.
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "claude_history" not in st.session_state:
+    st.session_state.claude_history = []
 
 def make_voice(msg):
     """Fill in msg['audio'], or a note saying why the device voice is used."""
@@ -447,6 +478,21 @@ with st.expander("📎 Attach a PDF, photo, or text file"):
 
 def explain_error(e):
     """Turn an error into a short, honest message without leaking details."""
+    if isinstance(e, anthropic.APIError):
+        code = getattr(e, "status_code", None)
+        detail = str(getattr(e, "message", "") or e).lower()
+        if "credit balance" in detail:
+            return ("Troy's Claude credits ran out. Add more at console.anthropic.com → "
+                    "Billing, then ask again.")
+        if code == 401:
+            return "Claude didn't accept the API key (401). Check ANTHROPIC_API_KEY in Troy's secrets."
+        if code == 429:
+            return "Claude asked Troy to slow down (429). Wait a minute and try again."
+        if code in (500, 529) or (code or 0) >= 500:
+            return f"Claude's servers are busy ({code}). Try again in a minute."
+        if code == 400:
+            return "Claude couldn't read that request (400). If you attached a file, try a smaller one."
+        return f"Troy had a problem talking to Claude ({type(e).__name__}). Try again."
     code = getattr(e, "code", None)
     if code == 429:
         return "Troy hit today's free Gemini limit (429). Try again later or tomorrow."
@@ -457,8 +503,19 @@ def explain_error(e):
     return f"Troy had a problem ({type(e).__name__}). Try again."
 
 
+def shrink_photo(data, mime):
+    """Claude takes photos up to 5 MB; big phone photos get resized."""
+    if not mime.startswith("image/") or (len(data) < 3_500_000):
+        return data, mime
+    img = Image.open(io.BytesIO(data))
+    img.thumbnail((2000, 2000))
+    out = io.BytesIO()
+    img.convert("RGB").save(out, "JPEG", quality=85)
+    return out.getvalue(), "image/jpeg"
+
+
 def file_parts(files):
-    """Turn uploaded files into pieces Gemini can read. Returns (parts, problem)."""
+    """Read uploaded files into a simple list. Returns (files, problem)."""
     if len(files) > MAX_FILES:
         return None, f"Please attach {MAX_FILES} files or fewer at a time."
     parts = []
@@ -470,20 +527,113 @@ def file_parts(files):
         mime = FILE_TYPES.get(ext)
         if mime is None:
             return None, f"Troy can't read {f.name}. Use a PDF, photo, or text file."
-        parts.append(genai.types.Part.from_bytes(data=data, mime_type=mime))
+        try:
+            data, mime = shrink_photo(data, mime)
+        except Exception:
+            return None, f"Troy couldn't open the photo {f.name}. Try another one."
+        parts.append({"name": f.name, "mime": mime, "data": data})
     return parts, None
+
+
+def gemini_parts(files):
+    return [genai.types.Part.from_bytes(data=f["data"], mime_type=f["mime"]) for f in files]
+
+
+def claude_blocks(files, text):
+    """Turn files + text into the content blocks Claude reads."""
+    blocks = []
+    for f in files:
+        b64 = base64.b64encode(f["data"]).decode("ascii")
+        if f["mime"] == "application/pdf":
+            blocks.append({"type": "document", "title": f["name"],
+                           "source": {"type": "base64", "media_type": "application/pdf",
+                                      "data": b64}})
+        elif f["mime"].startswith("image/"):
+            blocks.append({"type": "image",
+                           "source": {"type": "base64", "media_type": f["mime"], "data": b64}})
+        else:
+            body = f["data"].decode("utf-8", errors="replace")
+            blocks.append({"type": "text", "text": f"File {f['name']}:\n{body}"})
+    blocks.append({"type": "text", "text": text})
+    return blocks
+
+
+def claude_messages():
+    """Recent history for Claude. Old files are swapped for a short note so a big
+    PDF isn't paid for again on every message."""
+    hist = st.session_state.claude_history[-HISTORY_MESSAGES:]
+    while hist and hist[0]["role"] != "user":
+        hist = hist[1:]
+    out = []
+    for i, m in enumerate(hist):
+        content = m["content"]
+        if isinstance(content, list) and i < len(hist) - FILE_MEMORY_MESSAGES:
+            kept = []
+            for b in content:
+                if b["type"] in ("image", "document"):
+                    kept.append({"type": "text", "text": "[a file Paul shared earlier]"})
+                else:
+                    kept.append(b)
+            content = kept
+        out.append({"role": m["role"], "content": content})
+    return out
+
+
+def ask_claude(files, text):
+    st.session_state.claude_history.append(
+        {"role": "user", "content": claude_blocks(files, text)}
+    )
+    try:
+        response = st.session_state.claude.messages.create(
+            model=claude_model,
+            max_tokens=CLAUDE_MAX_REPLY_TOKENS,
+            system=TROY_INSTRUCTIONS,
+            messages=claude_messages(),
+        )
+    except Exception:
+        st.session_state.claude_history.pop()  # keep history in user/assistant order
+        raise
+    answer = "".join(b.text for b in response.content if getattr(b, "type", "") == "text")
+    st.session_state.claude_history.append({"role": "assistant", "content": answer or "(no reply)"})
+    return answer
+
+
+def transcribe(audio_bytes, mime):
+    """Claude can't hear audio, so Gemini writes down what Paul said."""
+    last_error = None
+    for model in ("gemini-2.5-flash-lite", "gemini-2.5-flash"):
+        try:
+            r = st.session_state.client.models.generate_content(
+                model=model,
+                contents=[
+                    genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime),
+                    "Write down exactly what the speaker says. Reply with only the words.",
+                ],
+            )
+            if r.text and r.text.strip():
+                return r.text.strip()
+        except Exception as e:
+            last_error = e
+    raise last_error or ValueError("no words heard")
 
 
 def file_label(files):
     return "".join(f"\n\n📎 {f.name}" for f in files)
 
 
-def send_to_troy(user_text, message):
+def send_to_troy(user_text, files, text, audio=None):
+    """Send Paul's message to Troy's brain and add the reply to the chat."""
     st.session_state.messages.append({"role": "user", "text": user_text})
     st.session_state.hide_keyboard = True
     try:
-        response = st.session_state.chat.send_message(message)
-        answer = response.text
+        if brain == "claude":
+            answer = ask_claude(files, text)
+        else:
+            message = gemini_parts(files) + ([audio] if audio else []) + [text]
+            response = st.session_state.chat.send_message(
+                message if len(message) > 1 else text
+            )
+            answer = response.text
         if not isinstance(answer, str) or not answer.strip():
             answer = "I couldn't generate a text reply. Please try asking again."
         ok = True
@@ -491,7 +641,8 @@ def send_to_troy(user_text, message):
         answer = explain_error(e)
         ok = False
     reply = {"role": "assistant", "text": answer, "autoplay": auto_speak}
-    if ok and auto_speak and use_human_voice and not st.session_state.get("tts_off_today"):
+    if (ok and auto_speak and use_human_voice and api_key
+            and not st.session_state.get("tts_off_today")):
         # Show the text now; the voice is made right after it appears.
         reply["pending_voice"] = True
     st.session_state.messages.append(reply)
@@ -500,32 +651,43 @@ def send_to_troy(user_text, message):
 
 if prompt or send_voice or ask_about_files:
     parts, problem = file_parts(attached)
-    if not api_key:
-        st.warning("Paste your free Gemini key in the sidebar first, then try again.")
+    if not brain:
+        st.warning("Add Troy's Claude key (or a Gemini key) in the sidebar first, then try again.")
     elif problem:
         st.warning(problem)
     elif send_voice:
         audio_bytes = voice_audio.getvalue()
+        mime = voice_audio.type or "audio/wav"
         if len(audio_bytes) > MAX_AUDIO_BYTES:
             st.warning("That recording is too large. Please record a shorter message.")
+        elif brain == "claude" and not api_key:
+            st.warning("Voice messages need the Gemini key. For now, tap the 🎤 on your "
+                       "keyboard and talk — it types for you.")
         else:
-            audio_part = genai.types.Part.from_bytes(
-                data=audio_bytes,
-                mime_type=voice_audio.type or "audio/wav",
-            )
-            send_to_troy(
-                "🎤 Voice message" + file_label(attached),
-                parts
-                + [audio_part, "This is Paul's voice message. Reply to what they said."],
-            )
-            # New keys = fresh recorder and uploader, so nothing is sent twice.
-            st.session_state.voice_key += 1
-            if attached:
-                st.session_state.file_key += 1
-            st.rerun()
+            sent = True
+            if brain == "claude":
+                try:
+                    with st.spinner("Listening..."):
+                        words = transcribe(audio_bytes, mime)
+                    send_to_troy("🎤 " + words + file_label(attached), parts, words)
+                except Exception:
+                    sent = False
+                    st.warning("Troy couldn't make out that recording. Try again, or tap "
+                               "the 🎤 on your keyboard and talk — it types for you.")
+            else:
+                audio_part = genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime)
+                send_to_troy("🎤 Voice message" + file_label(attached), parts,
+                             "This is Paul's voice message. Reply to what he said.",
+                             audio=audio_part)
+            if sent:
+                # New keys = fresh recorder and uploader, so nothing is sent twice.
+                st.session_state.voice_key += 1
+                if attached:
+                    st.session_state.file_key += 1
+                st.rerun()
     else:
         text = prompt or "Please read the attached file(s) and help me understand them."
-        send_to_troy(text + file_label(attached), parts + [text] if parts else text)
+        send_to_troy(text + file_label(attached), parts, text)
         if attached:
             st.session_state.file_key += 1
         st.rerun()
