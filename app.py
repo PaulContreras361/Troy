@@ -488,6 +488,20 @@ st.markdown(
 )
 
 # ---- Welcome, like Claude: greet Paul by time of day until the chat starts ----
+def central_now():
+    try:
+        return datetime.now(ZoneInfo("America/Chicago"))
+    except Exception:  # no time-zone data on this computer
+        return datetime.now(timezone(timedelta(hours=-6)))
+
+
+def with_today(instructions):
+    """Add today's date so the brain doesn't have to guess it."""
+    now = central_now()
+    return (instructions + f"\nToday is {now:%A, %B} {now.day}, {now.year}, "
+            f"{now:%I:%M %p} Central time (Point Comfort, Texas).\n")
+
+
 def greeting():
     try:
         now = datetime.now(ZoneInfo("America/Chicago"))
@@ -691,7 +705,7 @@ def new_gemini_chat(history=None):
     ]
     st.session_state.chat = st.session_state.client.chats.create(
         model="gemini-2.5-flash",
-        config=genai.types.GenerateContentConfig(system_instruction=TROY_INSTRUCTIONS),
+        config=genai.types.GenerateContentConfig(system_instruction=with_today(TROY_INSTRUCTIONS)),
         history=contents or None,
     )
 
@@ -1061,7 +1075,7 @@ def ask_claude(files, text):
         response = st.session_state.claude.messages.create(
             model=claude_model,
             max_tokens=CLAUDE_MAX_REPLY_TOKENS,
-            system=TROY_INSTRUCTIONS,
+            system=with_today(TROY_INSTRUCTIONS),
             messages=claude_messages(),
         )
     except Exception:
@@ -1163,13 +1177,13 @@ def ask_brain_once(task, section, max_tokens=1200):
     content = f"Document: {st.session_state.study['name']}\n\nSECTION:\n{section}\n\nTASK:\n{task}"
     if brain == "claude":
         r = st.session_state.claude.messages.create(
-            model=claude_model, max_tokens=max_tokens, system=STUDY_SYSTEM,
+            model=claude_model, max_tokens=max_tokens, system=with_today(STUDY_SYSTEM),
             messages=[{"role": "user", "content": content}],
         )
         return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
     r = st.session_state.client.models.generate_content(
         model="gemini-2.5-flash", contents=content,
-        config=genai.types.GenerateContentConfig(system_instruction=STUDY_SYSTEM),
+        config=genai.types.GenerateContentConfig(system_instruction=with_today(STUDY_SYSTEM)),
     )
     return (r.text or "").strip()
 
