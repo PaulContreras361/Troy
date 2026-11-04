@@ -41,8 +41,10 @@ Streamlit loads keys from `.streamlit/secrets.toml`; Troy also accepts the `GEMI
 ## Run
 
 ```bash
-streamlit run app.py
+python -m streamlit run app.py
 ```
+
+On Windows, run that from your Troy folder in CMD. `python -m` works even when `streamlit` isn't on your PATH.
 
 ## GitHub Codespaces
 

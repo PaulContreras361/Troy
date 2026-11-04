@@ -16,3 +16,7 @@ htmlcov/
 /.pytest_cache/
 /.venv/
 venv/
+
+# Local logs and saved chats (keep private)
+*.log
+chat_history.json

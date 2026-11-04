@@ -1,5 +1,6 @@
 import html
 import os
+import re
 from uuid import uuid4
 
 import streamlit as st
@@ -9,9 +10,18 @@ MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 
 
+def speech_text(text):
+    """Strip markdown symbols so the voice doesn't read out '*' and '#'."""
+    text = str(text or "")
+    text = re.sub(r"```.*?```", " (code shown on screen) ", text, flags=re.S)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)  # [label](link) -> label
+    text = re.sub(r"[*_`#>|~]+", "", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
 def speak_reply(text, autoplay=False):
     container_id = f"troy-speech-{uuid4().hex}"
-    safe_text = html.escape(str(text or ""))
+    safe_text = html.escape(speech_text(text))
     start_speech = "speak();" if autoplay else ""
     st.html(
         f"""
@@ -32,7 +42,14 @@ def speak_reply(text, autoplay=False):
                 }}
                 window.speechSynthesis.cancel();
                 const text = container.querySelector(".speech-text").textContent;
-                window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+                // Chrome stops long utterances after ~15 s, so speak in
+                // sentence-sized pieces that queue one after another.
+                const pieces = text.match(/[^.!?\\n]+[.!?]*\\s*/g) || [text];
+                for (const piece of pieces) {{
+                    if (piece.trim()) {{
+                        window.speechSynthesis.speak(new SpeechSynthesisUtterance(piece.trim()));
+                    }}
+                }}
             }}
             readButton.addEventListener("click", speak);
             stopButton.addEventListener("click", () => {{
@@ -68,7 +85,7 @@ st.markdown(
     <style>
     .block-container {
         max-width: 54rem;
-        padding: 2.5rem 1.5rem 6rem;
+        padding: 4rem 1.5rem 6rem;
     }
 
     [data-testid="stChatMessage"] {
@@ -78,7 +95,7 @@ st.markdown(
 
     @media (max-width: 640px) {
         .block-container {
-            padding: 1rem 0.75rem calc(5rem + env(safe-area-inset-bottom));
+            padding: 3.5rem 0.75rem calc(5rem + env(safe-area-inset-bottom));
         }
 
         [data-testid="stChatMessage"] {
@@ -151,7 +168,11 @@ for msg in st.session_state.messages:
             speak_reply(msg["text"], autoplay=autoplay)
 
 prompt = st.chat_input("What would you like to learn?", max_chars=MAX_PROMPT_CHARS)
-voice_audio = st.audio_input("Or record a voice message")
+if "voice_key" not in st.session_state:
+    st.session_state.voice_key = 0
+voice_audio = st.audio_input(
+    "Or record a voice message", key=f"voice_{st.session_state.voice_key}"
+)
 send_voice = st.button("Send voice message", disabled=voice_audio is None)
 
 
@@ -193,7 +214,12 @@ if prompt or send_voice:
                 data=audio_bytes,
                 mime_type=voice_audio.type or "audio/wav",
             )
-            send_to_troy("🎤 Voice message", audio_part)
+            send_to_troy(
+                "🎤 Voice message",
+                [audio_part, "This is the learner's voice message. Reply to what they said."],
+            )
+            # New key = fresh recorder, so the same clip can't be sent twice.
+            st.session_state.voice_key += 1
             st.rerun()
     else:
         send_to_troy(prompt, prompt)
