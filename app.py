@@ -1,6 +1,8 @@
 import html
+import io
 import os
 import re
+import wave
 from uuid import uuid4
 
 import streamlit as st
@@ -35,6 +37,60 @@ def speech_text(text):
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
+# Gemini's free text-to-speech model and a few of its voices.
+TTS_MODEL = "gemini-3.1-flash-tts-preview"
+TTS_VOICES = {
+    "Charon — calm, informative": "Charon",
+    "Puck — upbeat": "Puck",
+    "Kore — firm": "Kore",
+    "Sulafat — warm": "Sulafat",
+    "Aoede — breezy": "Aoede",
+    "Enceladus — soft, breathy": "Enceladus",
+}
+MAX_TTS_CHARS = 2_500
+
+
+def pcm_to_wav(pcm, rate=24_000):
+    """Gemini sends raw 16-bit mono sound; wrap it so phones can play it."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def human_voice(client, text, voice_name):
+    """Return WAV bytes of Troy saying `text` in a natural Gemini voice."""
+    spoken = speech_text(text)
+    if len(spoken) > MAX_TTS_CHARS:
+        spoken = spoken[:MAX_TTS_CHARS].rsplit(" ", 1)[0] + " ... The rest is on screen."
+    response = client.models.generate_content(
+        model=TTS_MODEL,
+        contents="Read this aloud in a warm, natural, conversational voice:\n" + spoken,
+        config=genai.types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=genai.types.SpeechConfig(
+                voice_config=genai.types.VoiceConfig(
+                    prebuilt_voice_config=genai.types.PrebuiltVoiceConfig(
+                        voice_name=voice_name,
+                    )
+                )
+            ),
+        ),
+    )
+    for part in response.candidates[0].content.parts:
+        blob = getattr(part, "inline_data", None)
+        if blob and blob.data:
+            rate = 24_000
+            match = re.search(r"rate=(\d+)", blob.mime_type or "")
+            if match:
+                rate = int(match.group(1))
+            return pcm_to_wav(blob.data, rate)
+    raise ValueError("no audio returned")
+
+
 def speak_reply(text, autoplay=False):
     container_id = f"troy-speech-{uuid4().hex}"
     safe_text = html.escape(speech_text(text))
@@ -61,11 +117,32 @@ def speak_reply(text, autoplay=False):
                 // Chrome stops long utterances after ~15 s, so speak in
                 // sentence-sized pieces that queue one after another.
                 const pieces = text.match(/[^.!?\\n]+[.!?]*\\s*/g) || [text];
+                const voice = bestVoice();
                 for (const piece of pieces) {{
                     if (piece.trim()) {{
-                        window.speechSynthesis.speak(new SpeechSynthesisUtterance(piece.trim()));
+                        const u = new SpeechSynthesisUtterance(piece.trim());
+                        if (voice) {{
+                            try {{ u.voice = voice; u.lang = voice.lang; }} catch (e) {{}}
+                        }}
+                        window.speechSynthesis.speak(u);
                     }}
                 }}
+            }}
+            // Pick the most natural English voice on this device:
+            // Premium/Enhanced (iPhone), Natural/Online (Edge), Google (Chrome).
+            function bestVoice() {{
+                const voices = window.speechSynthesis.getVoices()
+                    .filter(v => /^en/i.test(v.lang));
+                const rank = v =>
+                    (/premium/i.test(v.name) ? 60 : 0) +
+                    (/natural|neural|online/i.test(v.name) ? 50 : 0) +
+                    (/enhanced/i.test(v.name) ? 40 : 0) +
+                    (/google/i.test(v.name) ? 30 : 0) +
+                    (/^(ava|evan|zoe|nathan|samantha|alex|aria|guy|jenny)\\b/i.test(v.name) ? 10 : 0) +
+                    (/en[-_]US/i.test(v.lang) ? 5 : 0) +
+                    (v.localService ? 0 : 1);
+                voices.sort((a, b) => rank(b) - rank(a));
+                return voices[0] || null;
             }}
             readButton.addEventListener("click", speak);
             stopButton.addEventListener("click", () => {{
@@ -147,6 +224,15 @@ except Exception:
 st.sidebar.title("TROY")
 st.sidebar.write("Prototype v0.2")
 auto_speak = st.sidebar.checkbox("Automatically read Troy's replies aloud", value=True)
+use_human_voice = st.sidebar.checkbox(
+    "Human voice (Gemini)",
+    value=True,
+    help="Uses Gemini's free voice model: one extra free call per reply, on its own "
+    "daily allowance. If it's unavailable, Troy falls back to your device's voice.",
+)
+voice_label = st.sidebar.selectbox(
+    "Troy's voice", list(TTS_VOICES), disabled=not use_human_voice
+)
 
 if not api_key:
     api_key = st.sidebar.text_input("Paste your free Gemini key:", type="password")
@@ -184,7 +270,12 @@ for msg in st.session_state.messages:
         st.write(msg["text"])
         if msg["role"] == "assistant":
             autoplay = msg.pop("autoplay", False)
-            speak_reply(msg["text"], autoplay=autoplay)
+            if msg.get("audio"):
+                st.audio(msg["audio"], format="audio/wav", autoplay=autoplay)
+            else:
+                if msg.get("voice_note"):
+                    st.caption(msg["voice_note"])
+                speak_reply(msg["text"], autoplay=autoplay)
 
 prompt = st.chat_input("What would you like to learn?", max_chars=MAX_PROMPT_CHARS)
 if "voice_key" not in st.session_state:
@@ -246,11 +337,27 @@ def send_to_troy(user_text, message):
         answer = response.text
         if not isinstance(answer, str) or not answer.strip():
             answer = "I couldn't generate a text reply. Please try asking again."
+        ok = True
     except Exception as e:
         answer = explain_error(e)
-    st.session_state.messages.append(
-        {"role": "assistant", "text": answer, "autoplay": auto_speak}
-    )
+        ok = False
+    reply = {"role": "assistant", "text": answer, "autoplay": auto_speak}
+    if ok and use_human_voice and not st.session_state.get("tts_off_today"):
+        try:
+            with st.spinner("Troy is getting his voice ready..."):
+                reply["audio"] = human_voice(
+                    st.session_state.client, answer, TTS_VOICES[voice_label]
+                )
+        except Exception as e:
+            if getattr(e, "code", None) == 429:
+                # Voice allowance used up: stop trying for the rest of this visit.
+                st.session_state.tts_off_today = True
+                reply["voice_note"] = "Human voice used up for today — using your device's voice."
+            else:
+                reply["voice_note"] = (
+                    f"Human voice unavailable ({type(e).__name__}) — using your device's voice."
+                )
+    st.session_state.messages.append(reply)
 
 
 if prompt or send_voice or ask_about_files:

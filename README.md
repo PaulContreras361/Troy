@@ -84,6 +84,8 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 - Ask Troy about a topic, request a step-by-step explanation, or ask for practice questions.
 - Use **Record a voice message** to speak to Troy, then select **Send voice message**. Replies are read aloud automatically by default; use the sidebar checkbox to turn this off, or select **Stop speaking** below a reply at any time. **Read aloud** replays a reply.
 - Tap **📎 Attach a PDF, photo, or text file** to have Troy read a PDF, a photo (iPhone camera or library), or a .txt/.csv/.md file. Type a question and send, or tap **Ask Troy about these files**. Up to 5 files, 10 MB each.
+- **Human voice:** Troy speaks his replies in a natural Gemini voice (sidebar: **Human voice (Gemini)** and **Troy's voice**). It's free but uses one extra Gemini call per reply on the voice model's own daily allowance. If that runs out or fails, Troy says so and uses your device's best voice instead.
+- **Better device voice on iPhone:** Settings → Accessibility → Spoken Content → Voices → English → download a **Premium** or **Enhanced** voice (e.g. Ava or Evan). Troy picks it automatically.
 - Use the sidebar to add a Gemini API key.
 - The app uses Gemini 2.5 Flash.
 - Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.
