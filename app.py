@@ -4,23 +4,30 @@ import streamlit as st
 import streamlit.components.v1 as components
 from google import genai
 
-def speak_reply(text):
+def speak_reply(text, autoplay=False):
     safe_text = html.escape(text)
+    start_speech = "speak();" if autoplay else ""
     components.html(
         f"""
-        <button id="speak-button" type="button">🔊 Read aloud</button>
+        <button type="button" onclick="speak()">🔊 Read aloud</button>
+        <button type="button" onclick="window.speechSynthesis.cancel()">⏹ Stop speaking</button>
         <span id="speech-text" style="display:none">{safe_text}</span>
         <script>
-        const button = document.getElementById("speak-button");
-        button.addEventListener("click", () => {{
+        function speak() {{
             if (!("speechSynthesis" in window)) {{
-                button.textContent = "Speech is not supported in this browser";
                 return;
             }}
             window.speechSynthesis.cancel();
             const text = document.getElementById("speech-text").textContent;
             window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-        }});
+        }}
+        if (!("speechSynthesis" in window)) {{
+            document.querySelectorAll("button").forEach((button) => {{
+                button.disabled = true;
+                button.textContent = "Speech is not supported in this browser";
+            }});
+        }}
+        {start_speech}
         </script>
         """,
         height=48,
@@ -87,6 +94,7 @@ except Exception:
 
 st.sidebar.title("TROY")
 st.sidebar.write("Prototype v0.2")
+auto_speak = st.sidebar.checkbox("Automatically read Troy's replies aloud", value=True)
 
 if not api_key:
     api_key = st.sidebar.text_input("Paste your free Gemini key:", type="password")
@@ -120,7 +128,8 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["text"])
         if msg["role"] == "assistant":
-            speak_reply(msg["text"])
+            autoplay = msg.pop("autoplay", False)
+            speak_reply(msg["text"], autoplay=autoplay)
 
 prompt = st.chat_input("What would you like to learn?")
 voice_audio = st.audio_input("Or record a voice message")
@@ -133,7 +142,9 @@ def send_to_troy(user_text, message):
         answer = st.session_state.chat.send_message(message).text
     except Exception as e:
         answer = "Troy had a problem: " + str(e)
-    st.session_state.messages.append({"role": "assistant", "text": answer})
+    st.session_state.messages.append(
+        {"role": "assistant", "text": answer, "autoplay": auto_speak}
+    )
 
 
 if prompt or send_voice:
