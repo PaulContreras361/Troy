@@ -331,9 +331,9 @@ st.markdown(
        "Hosted with Streamlit" crown) in the bottom-right corner, outside Troy,
        where Troy can't hide them. Lift the message box above them. */
     /* Lift the box itself (the outer frame didn't move on Streamlit Cloud).
-       5.5rem clears Safari's floating toolbar plus the two badges. */
+       1.5rem keeps it just above the two badges. */
     [data-testid="stChatInput"] {
-        margin-bottom: calc(5.5rem + env(safe-area-inset-bottom)) !important;
+        margin-bottom: calc(1.5rem + env(safe-area-inset-bottom)) !important;
     }
     [data-testid="stChatInput"] {
         border-radius: 1.6rem !important;
