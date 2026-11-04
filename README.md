@@ -1,6 +1,6 @@
 # Troy
 
-Personal AI Assistant powered by Streamlit and Gemini.
+Personal AI tutor powered by Streamlit and Gemini. Troy can explain topics, walk through problems, and help you practice.
 
 ## Requirements
 
@@ -71,6 +71,7 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 
 ## Usage
 
-- Enter a prompt in the chat input.
+- Ask Troy about a topic, request a step-by-step explanation, or ask for practice questions.
 - Use the sidebar to add a Gemini API key.
 - The app uses Gemini 2.5 Flash.
+- Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.

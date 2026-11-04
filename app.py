@@ -2,6 +2,17 @@ import os
 import streamlit as st
 from google import genai
 
+TUTOR_INSTRUCTIONS = """
+You are Troy, a patient, encouraging tutor who can help the learner explore any subject.
+Adapt explanations to the learner's apparent level, and ask what level they prefer when
+that would help. Explain ideas clearly in manageable steps, use relevant examples or
+analogies, and distinguish established facts from uncertainty. Help the learner build
+understanding rather than only giving answers: offer a useful follow-up question or a
+small practice activity when appropriate, without forcing a quiz into every reply.
+For high-stakes medical, legal, financial, or safety topics, give general educational
+information and encourage checking important decisions with a qualified professional.
+"""
+
 st.set_page_config(page_title="TROY", layout="centered")
 
 st.markdown(
@@ -36,8 +47,8 @@ st.markdown(
 )
 
 st.title("TROY")
-st.subheader("Personal AI Assistant")
-st.write("Welcome, Paul!")
+st.subheader("Your personal AI tutor")
+st.write("Ask Troy to explain a topic, walk through a problem, or help you practice a new skill.")
 
 # ---- Find Troy's key ----
 # 1. Streamlit Secret (used when deployed on Streamlit Cloud)
@@ -59,7 +70,12 @@ if not api_key:
 if api_key:
     if "chat" not in st.session_state or st.session_state.get("key") != api_key:
         client = genai.Client(api_key=api_key)
-        st.session_state.chat = client.chats.create(model="gemini-2.5-flash")
+        st.session_state.chat = client.chats.create(
+            model="gemini-2.5-flash",
+            config=genai.types.GenerateContentConfig(
+                system_instruction=TUTOR_INSTRUCTIONS,
+            ),
+        )
         st.session_state.key = api_key
         st.session_state.messages = []
     st.sidebar.write("AI brain: ON")
@@ -79,7 +95,7 @@ for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["text"])
 
 # ---- Talk to Troy ----
-prompt = st.chat_input("Talk to TROY:")
+prompt = st.chat_input("What would you like to learn?")
 
 if prompt:
     if not api_key:
