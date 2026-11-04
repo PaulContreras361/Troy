@@ -118,8 +118,11 @@ if not api_key:
 # ---- Wake the brain up once we have a key ----
 if api_key:
     if "chat" not in st.session_state or st.session_state.get("key") != api_key:
-        client = genai.Client(api_key=api_key)
-        st.session_state.chat = client.chats.create(
+        # Keep the client in session_state. If it is a throwaway variable,
+        # Python deletes it after this run and the chat fails with
+        # "client has been closed" on the next message.
+        st.session_state.client = genai.Client(api_key=api_key)
+        st.session_state.chat = st.session_state.client.chats.create(
             model="gemini-2.5-flash",
             config=genai.types.GenerateContentConfig(
                 system_instruction=TUTOR_INSTRUCTIONS,
@@ -152,6 +155,18 @@ voice_audio = st.audio_input("Or record a voice message")
 send_voice = st.button("Send voice message", disabled=voice_audio is None)
 
 
+def explain_error(e):
+    """Turn an error into a short, honest message without leaking details."""
+    code = getattr(e, "code", None)
+    if code == 429:
+        return "Troy hit today's free Gemini limit (429). Try again later or tomorrow."
+    if code in (400, 401, 403):
+        return f"Gemini rejected the request ({code}). Check that the API key is correct."
+    if code is not None and code >= 500:
+        return f"Gemini's servers had a problem ({code}). Try again in a minute."
+    return f"Troy had a problem ({type(e).__name__}). Try again."
+
+
 def send_to_troy(user_text, message):
     st.session_state.messages.append({"role": "user", "text": user_text})
     try:
@@ -159,8 +174,8 @@ def send_to_troy(user_text, message):
         answer = response.text
         if not isinstance(answer, str) or not answer.strip():
             answer = "I couldn't generate a text reply. Please try asking again."
-    except Exception:
-        answer = "Troy couldn't complete that request. Check the API key or connection and try again."
+    except Exception as e:
+        answer = explain_error(e)
     st.session_state.messages.append(
         {"role": "assistant", "text": answer, "autoplay": auto_speak}
     )
