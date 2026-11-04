@@ -327,8 +327,11 @@ st.markdown(
         font-size: 0.9rem;
     }
     /* Message box, like Claude's: big, rounded, easy to see */
+    /* Streamlit Cloud puts its own badges (your profile picture and the red
+       "Hosted with Streamlit" crown) in the bottom-right corner, outside Troy,
+       where Troy can't hide them. Lift the message box above them. */
     [data-testid="stBottomBlockContainer"] {
-        padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+        padding-bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;
     }
     [data-testid="stChatInput"] {
         border-radius: 1.6rem !important;
