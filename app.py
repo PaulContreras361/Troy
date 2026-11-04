@@ -1,6 +1,7 @@
 import base64
 import html
 import json
+import zipfile
 import time
 import io
 import os
@@ -42,6 +43,7 @@ FILE_TYPES = {
     "txt": "text/plain",
     "md": "text/plain",
     "csv": "text/csv",
+    "zip": "application/zip",   # unpacked; the readable files inside are used
 }
 
 
@@ -1021,6 +1023,43 @@ def shrink_photo(data, mime):
     return out.getvalue(), "image/jpeg"
 
 
+MAX_ZIP_FILES = 10                 # readable files used from one zip
+MAX_ZIP_TOTAL = 30 * 1024 * 1024   # unpacked size limit (guards against zip bombs)
+
+
+def unzip(name, data):
+    """Unpack a zip in memory. Returns (readable files, skipped names, problem)."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return [], [], f"{name} isn't a working zip file."
+    found, skipped, total = [], [], 0
+    for info in zf.infolist():
+        inner = info.filename.rsplit("/", 1)[-1]
+        if info.is_dir() or not inner or inner.startswith(".") or "__MACOSX/" in info.filename:
+            continue  # folders and Mac/hidden extras
+        if info.flag_bits & 0x1:
+            return [], [], f"{name} is password-protected. Unzip it first, then add the files."
+        ext = inner.rsplit(".", 1)[-1].lower() if "." in inner else ""
+        mime = FILE_TYPES.get(ext)
+        if mime is None or ext == "zip":
+            skipped.append(inner)
+            continue
+        if len(found) >= MAX_ZIP_FILES:
+            skipped.append(inner)
+            continue
+        with zf.open(info) as fh:
+            blob = fh.read(MAX_FILE_BYTES + 1)
+        total += len(blob)
+        if len(blob) > MAX_FILE_BYTES:
+            skipped.append(inner + " (over 10 MB)")
+            continue
+        if total > MAX_ZIP_TOTAL:
+            return [], [], f"{name} unpacks to more than 30 MB. Send fewer files at a time."
+        found.append({"name": inner, "mime": mime, "data": blob})
+    return found, skipped, None
+
+
 def file_parts(files):
     """Read uploaded files into a simple list. Returns (files, problem)."""
     if len(files) > MAX_FILES:
@@ -1033,12 +1072,24 @@ def file_parts(files):
         ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
         mime = FILE_TYPES.get(ext)
         if mime is None:
-            return None, f"Troy can't read {f.name}. Use a PDF, photo, or text file."
-        try:
-            data, mime = shrink_photo(data, mime)
-        except Exception:
-            return None, f"Troy couldn't open the photo {f.name}. Try another one."
-        parts.append({"name": f.name, "mime": mime, "data": data})
+            return None, f"Troy can't read {f.name}. Use a PDF, photo, text file, or zip."
+        if ext == "zip":
+            inside, skipped, problem = unzip(f.name, data)
+            if problem:
+                return None, problem
+            if not inside:
+                return None, (f"Nothing in {f.name} that Troy can read — he takes PDFs, "
+                              "photos, and .txt/.csv/.md files.")
+            st.session_state.zip_note = (f.name, [x["name"] for x in inside], skipped)
+            items = inside
+        else:
+            items = [{"name": f.name, "mime": mime, "data": data}]
+        for item in items:
+            try:
+                item["data"], item["mime"] = shrink_photo(item["data"], item["mime"])
+            except Exception:
+                return None, f"Troy couldn't open the photo {item['name']}. Try another one."
+            parts.append(item)
     return parts, None
 
 
@@ -1125,6 +1176,19 @@ def transcribe(audio_bytes, mime):
 
 
 def file_label(files):
+    note = st.session_state.pop("zip_note", None)
+    if note:
+        zname, used, skipped = note
+        label = f"\n\n📎 {zname} → " + ", ".join(used)
+        if skipped:
+            label += "\n\n⚠️ Skipped (Troy can't read these): " + ", ".join(skipped[:8]) + \
+                (f" and {len(skipped) - 8} more" if len(skipped) > 8 else "")
+        others = [f for f in files if not f.name.lower().endswith(".zip")]
+        return label + "".join(f"\n\n📎 {f.name}" for f in others)
+    return _plain_file_label(files)
+
+
+def _plain_file_label(files):
     return "".join(f"\n\n📎 {f.name}" for f in files)
 
 
@@ -1340,8 +1404,32 @@ def read_along(sec, autoplay, rate):
             unsafe_allow_javascript=True)
 
 
+def study_take_files(named):
+    """PDFs (or zips of PDFs) added in Study: one PDF opens; several = pick one."""
+    pdfs = []
+    for name, data in named:
+        low = (name or "").lower()
+        if low.endswith(".pdf"):
+            pdfs.append((name, data))
+        elif low.endswith(".zip"):
+            inside, _, problem = unzip(name, data)
+            if problem:
+                st.session_state.study_note = problem
+            pdfs += [(x["name"], x["data"]) for x in inside if x["mime"] == "application/pdf"]
+    if len(pdfs) == 1:
+        load_study_pdf(*pdfs[0])
+    elif len(pdfs) > 1:
+        st.session_state.zip_pdfs = pdfs
+        st.session_state.study = None
+    elif not st.session_state.get("study_note"):
+        st.session_state.study_note = "No PDF found there. Study mode needs a PDF (or a zip with PDFs in it)."
+
+
 def render_study():
     s = st.session_state.study
+    note = st.session_state.pop("study_note", None)
+    if note:
+        st.warning(note)
     # A PDF handed over from the chat ("Study this section by section")
     pending = st.session_state.pop("study_load", None)
     if pending:
@@ -1368,11 +1456,21 @@ def render_study():
                          icon=":material/description:"):
                 load_study_pdf(name, st.session_state.last_pdf["data"])
                 st.rerun()
-        up = st.file_uploader("Add a PDF to study", type=["pdf"], key="study_upload")
-        if up is not None:
-            load_study_pdf(up.name, up.getvalue())
-            if st.session_state.study:
-                st.rerun()
+        choices = st.session_state.get("zip_pdfs")
+        if choices:
+            st.markdown("**Which PDF do you want to study?**")
+            for i, (pname, pdata) in enumerate(choices):
+                if st.button(pname, key=f"zip_pick_{i}", icon=":material/picture_as_pdf:",
+                             width="stretch"):
+                    st.session_state.zip_pdfs = None
+                    load_study_pdf(pname, pdata)
+                    st.rerun()
+        up = st.file_uploader("Add a PDF (or a zip of PDFs) to study", type=["pdf", "zip"],
+                              key="study_upload")
+        if up is not None and st.session_state.get("study_up_seen") != up.file_id:
+            st.session_state.study_up_seen = up.file_id
+            study_take_files([(up.name, up.getvalue())])
+            st.rerun()
         if st.button("Back to chat", key="study_back_chat", type="tertiary",
                      icon=":material/arrow_back:"):
             st.session_state.study_on = False
@@ -1522,11 +1620,11 @@ if st.session_state.study_on:
     render_study()
 
 if st.session_state.study_on and (prompt or send_voice or attached):
-    pdfs = [f for f in attached if (f.name or "").lower().endswith(".pdf")]
-    if not brain and not pdfs:
+    has_files = bool(attached)
+    if not brain and not has_files:
         st.warning("Add Troy's Claude key (or a Gemini key) in the sidebar first, then try again.")
-    elif pdfs:
-        load_study_pdf(pdfs[0].name, pdfs[0].getvalue())
+    elif has_files:
+        study_take_files([(f.name, f.getvalue()) for f in attached])
         st.rerun()
     elif not st.session_state.study:
         st.warning("Add a PDF first: tap ＋ or use “Add a PDF to study”.")
