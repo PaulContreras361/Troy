@@ -139,7 +139,10 @@ send_voice = st.button("Send voice message", disabled=voice_audio is None)
 def send_to_troy(user_text, message):
     st.session_state.messages.append({"role": "user", "text": user_text})
     try:
-        answer = st.session_state.chat.send_message(message).text
+        response = st.session_state.chat.send_message(message)
+        answer = response.text
+        if not isinstance(answer, str) or not answer.strip():
+            answer = "I couldn't generate a text reply. Please try asking again."
     except Exception as e:
         answer = "Troy had a problem: " + str(e)
     st.session_state.messages.append(
