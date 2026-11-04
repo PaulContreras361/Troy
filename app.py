@@ -326,6 +326,69 @@ st.markdown(
         justify-content: center;
         font-size: 0.9rem;
     }
+    /* Message box, like Claude's: big, rounded, easy to see */
+    [data-testid="stBottomBlockContainer"] {
+        padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    }
+    [data-testid="stChatInput"] {
+        border-radius: 1.6rem !important;
+        border: 1px solid rgba(128, 128, 128, 0.45) !important;
+        background: rgba(128, 128, 128, 0.12) !important;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+        padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+    }
+    [data-testid="stChatInput"]:focus-within {
+        border-color: #0ea5a4 !important;
+    }
+    /* one box only (Streamlit draws a second one inside) */
+    [data-testid="stChatInput"] > div {
+        background: transparent !important;
+        border: none !important;
+    }
+    /* text on its own full-width row, buttons underneath (like Claude) */
+    [data-testid="stChatInput"] > div > div {
+        flex-wrap: wrap !important;
+        align-items: center;
+        row-gap: 0.35rem;
+    }
+    [data-testid="stChatInput"] > div > div > div:has(textarea) {
+        order: 0;
+        flex: 1 1 100% !important;
+        width: 100% !important;
+    }
+    [data-testid="stChatInput"] > div > div > div:has([data-testid="stChatInputFileUploadButton"]) {
+        order: 1;
+    }
+    [data-testid="stChatInput"] > div > div > div:has([data-testid="stChatInputSubmitButton"]) {
+        order: 2;
+        margin-left: auto;
+        gap: 0.4rem;
+    }
+    [data-testid="stChatInput"] textarea {
+        font-size: 1.15rem !important;
+        line-height: 1.5 !important;
+        min-height: 2.6rem;
+        padding-left: 0.25rem !important;
+    }
+    [data-testid="stChatInputFileUploadButton"] button,
+    [data-testid="stChatInputMicButton"] {
+        border: 1px solid rgba(128, 128, 128, 0.45) !important;
+        border-radius: 50% !important;
+    }
+    [data-testid="stChatInputSubmitButton"] {
+        background: #0ea5a4 !important;
+        color: #ffffff !important;
+        border-radius: 50% !important;
+        width: 2.75rem !important;
+        height: 2.75rem !important;
+    }
+    [data-testid="stChatInputSubmitButton"]:disabled {
+        opacity: 0.45;
+    }
+    [data-testid="stChatInput"] button {
+        min-width: 2.75rem;
+        min-height: 2.75rem;
+    }
     .troy-topbar {
         display: flex;
         align-items: center;
@@ -735,24 +798,21 @@ for msg in st.session_state.messages:
                     st.caption(msg["voice_note"])
                 speak_reply(msg["text"], autoplay=autoplay)
 
-prompt = st.chat_input("How can I help you today?", max_chars=MAX_PROMPT_CHARS)
-if "voice_key" not in st.session_state:
-    st.session_state.voice_key = 0
-voice_audio = st.audio_input(
-    "Or record a voice message", key=f"voice_{st.session_state.voice_key}"
+# One message box, like Claude's: ＋ for files, the text, a mic, and send.
+submission = st.chat_input(
+    "How can I help you today?",
+    key="composer",
+    max_chars=MAX_PROMPT_CHARS,
+    accept_file="multiple",
+    file_type=[f".{ext}" for ext in FILE_TYPES],
+    accept_audio=True,
+    max_upload_size=10,
 )
-send_voice = st.button("Send voice message", disabled=voice_audio is None)
-
-if "file_key" not in st.session_state:
-    st.session_state.file_key = 0
-with st.expander("📎 Attach a PDF, photo, or text file", key="attach_panel"):
-    attached = st.file_uploader(
-        "Troy reads these along with your next message",
-        type=list(FILE_TYPES),
-        accept_multiple_files=True,
-        key=f"files_{st.session_state.file_key}",
-    ) or []
-    ask_about_files = st.button("Ask Troy about these files", disabled=not attached)
+prompt = (submission.text or "").strip() if submission else ""
+attached = list(submission.files or []) if submission else []
+voice_audio = submission.audio if submission else None
+send_voice = voice_audio is not None
+ask_about_files = bool(attached) and not prompt and not send_voice
 
 
 def explain_error(e):
@@ -945,31 +1005,23 @@ if prompt or send_voice or ask_about_files:
         elif brain == "claude" and not api_key:
             st.warning("Voice messages need the Gemini key. For now, tap the 🎤 on your "
                        "keyboard and talk — it types for you.")
-        else:
-            sent = True
-            if brain == "claude":
-                try:
-                    with st.spinner("Listening..."):
-                        words = transcribe(audio_bytes, mime)
-                    send_to_troy("🎤 " + words + file_label(attached), parts, words)
-                except Exception:
-                    sent = False
-                    st.warning("Troy couldn't make out that recording. Try again, or tap "
-                               "the 🎤 on your keyboard and talk — it types for you.")
-            else:
-                audio_part = genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime)
-                send_to_troy("🎤 Voice message" + file_label(attached), parts,
-                             "This is Paul's voice message. Reply to what he said.",
-                             audio=audio_part)
-            if sent:
-                # New keys = fresh recorder and uploader, so nothing is sent twice.
-                st.session_state.voice_key += 1
-                if attached:
-                    st.session_state.file_key += 1
+        elif brain == "claude":
+            try:
+                with st.spinner("Listening..."):
+                    words = transcribe(audio_bytes, mime)
+                said = (prompt + "\n\n" + words).strip() if prompt else words
+                send_to_troy("🎤 " + said + file_label(attached), parts, said)
                 st.rerun()
+            except Exception:
+                st.warning("Troy couldn't make out that recording. Try again, or tap "
+                           "the 🎤 on your keyboard and talk — it types for you.")
+        else:
+            audio_part = genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime)
+            note = "This is Paul's voice message. Reply to what he said."
+            send_to_troy("🎤 Voice message" + file_label(attached), parts,
+                         (prompt + "\n\n" + note) if prompt else note, audio=audio_part)
+            st.rerun()
     else:
         text = prompt or "Please read the attached file(s) and help me understand them."
         send_to_troy(text + file_label(attached), parts, text)
-        if attached:
-            st.session_state.file_key += 1
         st.rerun()

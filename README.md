@@ -83,7 +83,7 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 
 - Ask Troy about a topic, request a step-by-step explanation, or ask for practice questions.
 - Use **Record a voice message** to speak to Troy, then select **Send voice message**. Replies are read aloud automatically by default; use the sidebar checkbox to turn this off, or select **Stop speaking** below a reply at any time. **Read aloud** replays a reply.
-- Tap **📎 Attach a PDF, photo, or text file** to have Troy read a PDF, a photo (iPhone camera or library), or a .txt/.csv/.md file. Type a question and send, or tap **Ask Troy about these files**. Up to 5 files, 10 MB each.
+- **Message box like Claude's:** type in the box at the bottom; tap **＋** to add PDFs, photos (camera or library) or .txt/.csv/.md files (up to 5, 10 MB each); tap the **mic** to record a voice note, then **Submit recording**; tap the teal arrow to send.
 - **Troy speaks by himself:** after your first tap on the page, every reply is read aloud automatically — no play button. The **🔊 Troy speaks out loud** switch at the top turns his voice off and on.
 - **Sidebar like Claude:** tap ☰ for **New chat**, **Search chats**, **Settings** (voice, brain, keys) and **Recents** — every chat is saved on your phone (browser storage), private to that phone, and survives Troy restarting. Tap a chat to reopen it; Troy remembers what was said.
 - **Keyboard:** after you send, the phone keyboard closes so you can read the reply.
