@@ -340,7 +340,7 @@ st.markdown(
         border: 1px solid rgba(128, 128, 128, 0.45) !important;
         background: rgba(128, 128, 128, 0.12) !important;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
-        padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+        padding: 0.3rem 0.45rem 0.3rem 0.6rem;
     }
     [data-testid="stChatInput"]:focus-within {
         border-color: #0ea5a4 !important;
@@ -354,7 +354,7 @@ st.markdown(
     [data-testid="stChatInput"] > div > div {
         flex-wrap: wrap !important;
         align-items: center;
-        row-gap: 0.35rem;
+        row-gap: 0;
     }
     [data-testid="stChatInput"] > div > div > div:has(textarea) {
         order: 0;
@@ -370,10 +370,12 @@ st.markdown(
         gap: 0.4rem;
     }
     [data-testid="stChatInput"] textarea {
-        font-size: 1.15rem !important;
-        line-height: 1.5 !important;
-        min-height: 2.6rem;
+        font-size: 1.1rem !important;
+        line-height: 1.4 !important;
+        min-height: 2.2rem;
         padding-left: 0.25rem !important;
+        padding-top: 0.45rem !important;
+        padding-bottom: 0.2rem !important;
     }
     [data-testid="stChatInputFileUploadButton"] button,
     [data-testid="stChatInputMicButton"] {
@@ -384,15 +386,15 @@ st.markdown(
         background: #0ea5a4 !important;
         color: #ffffff !important;
         border-radius: 50% !important;
-        width: 2.75rem !important;
-        height: 2.75rem !important;
+        width: 2.4rem !important;
+        height: 2.4rem !important;
     }
     [data-testid="stChatInputSubmitButton"]:disabled {
         opacity: 0.45;
     }
     [data-testid="stChatInput"] button {
-        min-width: 2.75rem;
-        min-height: 2.75rem;
+        min-width: 2.4rem;
+        min-height: 2.4rem;
     }
     .troy-topbar {
         display: flex;
@@ -434,6 +436,15 @@ st.markdown(
     }
     @media (prefers-color-scheme: light) {
         .troy-menu { background: rgba(255, 255, 255, 0.75); }
+    }
+    /* invisible marker pinned to the very top of Troy's page */
+    .troy-top-anchor {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 1px;
+        height: 1px;
+        pointer-events: none;
     }
     .troy-menu:active {
         opacity: 0.6;
@@ -477,6 +488,7 @@ def greeting():
 # ☰ menu button, like Claude's. Streamlit's own sidebar arrow is tiny and on
 # iPhone it hides under Safari's address bar, so this opens the sidebar instead.
 MENU_BUTTON = """
+<div class="troy-top-anchor"></div>
 <button class="troy-menu" type="button" aria-label="Open menu">
   <span></span><span></span><span></span>
 </button>
@@ -539,7 +551,16 @@ if st.session_state.pop("hide_keyboard", False):
              const el = document.activeElement;
              if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) el.blur();
            };
-           [0, 150, 600].forEach(ms => setTimeout(hide, ms));"""
+           [0, 150, 600].forEach(ms => setTimeout(hide, ms));
+           // The iPhone slides Streamlit Cloud's outer page up to make room for
+           // the keyboard and leaves it there. Slide it back so Troy's top
+           // (and the ☰) shows again. The marker is pinned, so Troy's own chat
+           // doesn't scroll.
+           const back = () => {
+             const a = document.querySelector(".troy-top-anchor");
+             if (a) a.scrollIntoView({ block: "start", inline: "nearest" });
+           };
+           [400, 900, 1600].forEach(ms => setTimeout(back, ms));"""
     )
 if not auto_speak:
     page_jobs.append("window.troyAudio && window.troyAudio.stop();")
