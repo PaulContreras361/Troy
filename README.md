@@ -1,12 +1,12 @@
 # Troy
 
-Personal AI Assistant powered by Streamlit and OpenAI.
+Personal AI Assistant powered by Streamlit and Gemini.
 
 ## Requirements
 
 - Python 3.11+ recommended
 - `streamlit`
-- `openai`
+- `google-genai`
 
 ## Setup
 
@@ -18,12 +18,12 @@ cd Troy
 python3 -m pip install -r requirements.txt
 ```
 
-2. Provide your OpenAI API key:
+2. Provide your Gemini API key:
 
 - Set the environment variable:
 
 ```bash
-export OPENAI_API_KEY="your-api-key"
+export GEMINI_API_KEY="your-api-key"
 ```
 
 - Or paste it in the Streamlit sidebar after launching the app.
@@ -33,10 +33,10 @@ Alternatively, persist the key locally so you don't need to re-enter it:
 - Create a file at `.streamlit/secrets.toml` with this content (do NOT commit it):
 
 ```toml
-OPENAI_API_KEY = "your-api-key"
+GEMINI_API_KEY = "your-api-key"
 ```
 
-Streamlit will automatically load keys from `.streamlit/secrets.toml` and `app.py` will prefer the sidebar input, then the secrets file, then the environment variable.
+Streamlit loads keys from `.streamlit/secrets.toml`; Troy also accepts the `GEMINI_API_KEY` environment variable or a key entered in the sidebar.
 
 ## Run
 
@@ -55,28 +55,22 @@ If you are running this project in GitHub Codespaces:
 
 ## Streamlit Community Cloud Deployment
 
-This repository is ready for Streamlit Community Cloud.
+Deploy Troy to Streamlit Community Cloud to use it from both your laptop and iPhone.
 
 1. Make sure `app.py` is in the repository root.
-2. Make sure `requirements.txt` includes:
-   - `streamlit==1.58.0`
-   - `openai==2.43.0`
-   - `Pillow>=9.0.0`
-3. Connect your GitHub repo to Streamlit Community Cloud.
-4. Choose the branch to deploy, then deploy the app.
-5. Add your OpenAI API key in the Streamlit Cloud secrets manager:
+2. Connect this GitHub repository to Streamlit Community Cloud and deploy `app.py`.
+3. Add your Gemini API key in the Streamlit Cloud secrets manager:
 
 ```toml
-OPENAI_API_KEY = "your-api-key"
+GEMINI_API_KEY = "your-api-key"
 ```
 
-6. Do not commit your actual `secrets.toml` to the repository.
+4. Open the deployed app URL in a browser on either device. On iPhone, open it in Safari, tap **Share**, then **Add to Home Screen**.
 
-This project also includes `.streamlit/config.toml` so Streamlit runs in headless mode with CORS disabled.
+Do not commit your actual `secrets.toml` to the repository. Check the deployment's access settings before sharing its URL or entering sensitive information. Chat history is kept only in the current browser session and is not synced between devices.
 
 ## Usage
 
 - Enter a prompt in the chat input.
-- Use the sidebar to add your OpenAI API key, select a model, or clear the chat history.
-- `gpt-3.5-turbo` is the default model for general use.
-
+- Use the sidebar to add a Gemini API key.
+- The app uses Gemini 2.5 Flash.

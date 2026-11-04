@@ -2,7 +2,38 @@ import os
 import streamlit as st
 from google import genai
 
-st.set_page_config(page_title="TROY", layout="wide")
+st.set_page_config(page_title="TROY", layout="centered")
+
+st.markdown(
+    """
+    <style>
+    .block-container {
+        max-width: 54rem;
+        padding: 2.5rem 1.5rem 6rem;
+    }
+
+    [data-testid="stChatMessage"] {
+        padding: 1rem;
+        border-radius: 0.75rem;
+    }
+
+    @media (max-width: 640px) {
+        .block-container {
+            padding: 1rem 0.75rem calc(5rem + env(safe-area-inset-bottom));
+        }
+
+        [data-testid="stChatMessage"] {
+            padding: 0.75rem;
+        }
+
+        [data-testid="stChatInput"] textarea {
+            font-size: 16px;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.title("TROY")
 st.subheader("Personal AI Assistant")
