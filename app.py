@@ -842,8 +842,8 @@ with st.sidebar:
                                             type="password", key="type_gemini_key").strip()
             api_key = typed["gemini"]
         if typed:
-            remember = st.checkbox("Remember keys on this phone", value=True, key="remember_keys",
-                                   help="Saved in this phone's browser only, so you don't "
+            remember = st.checkbox("Remember keys on this device", value=True, key="remember_keys",
+                                   help="Saved in this browser only, so you don't "
                                    "have to paste them again.")
             good = {k: v for k, v in typed.items() if v}
             bad = [k for k, v in good.items()
@@ -859,7 +859,7 @@ with st.sidebar:
                 st.session_state.keys_rev = uuid4().hex
                 st.rerun()
         if from_phone:
-            st.caption("🔑 " + " and ".join(from_phone) + " key saved on this phone.")
+            st.caption("🔑 " + " and ".join(from_phone) + " key saved on this device.")
             if st.button("Forget saved keys", key="forget_keys", type="tertiary",
                          icon=":material/key_off:"):
                 st.session_state.saved_keys = {}
@@ -877,7 +877,7 @@ with st.sidebar:
         else:
             st.caption("AI brain: waiting for a key")
         st.caption("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
-        st.caption("Chats are saved on this phone only.")
+        st.caption("Chats are saved on this device only.")
 
     st.markdown('<div class="troy-side-label">Recents</div>', unsafe_allow_html=True)
     recents = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
