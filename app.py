@@ -145,8 +145,11 @@ SPEAKER_JS = """
   function fitBox() {
     let lift = 0;
     if (isIOS && screen.height) {
-      const tall = window.innerHeight / screen.height;
-      if (tall > 0.86) lift = 76;
+      // Space the screen loses to Safari's bars. Solid bottom toolbar: about
+      // 190+ points. See-through toolbar (Troy's page runs under it): under
+      // about 150 points, so lift the box.
+      const lost = screen.height - window.innerHeight;
+      if (lost < 150) lift = 76;
     }
     document.documentElement.style.setProperty("--troy-lift", lift + "px");
   }
