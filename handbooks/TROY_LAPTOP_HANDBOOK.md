@@ -22,11 +22,12 @@ Your old Troy folders are **not touched**. Keep them until this one works, then 
 | `troy_outlook.py` | Reads email, writes **drafts only**. |
 | `troy_epr.py` | EPR Master Tracker checker (read-only, never changes the workbook). |
 | `troy_hotkey.py` | Troy Hotkey. |
+| `brain.py` | Troy's free local brain (Ollama), rebuilt from our Sept 10 build. |
 | `jarvis-troy\` | JARVIS, renamed so it wakes to **"Hey Troy"**. |
 | `extras\glass-hud.html` | The Iron Man hand-tracking screen. |
 | `extras\troy_desktop_assistant.html` | Your old one-file HTML Troy (kept, not used). |
 | `old\` | The last Troy 2.0 app and the Troy class files, for reference only. |
-| `handbooks\` | This handbook, and the Troy Hotkey handbook. |
+| `handbooks\` | This handbook, the Troy Hotkey handbook, and the Local Brain handbook. |
 
 ---
 
@@ -171,6 +172,15 @@ This is JARVIS with the name changed: it wakes to **"Hey Troy"**, calls itself T
 - **D** = diagnostics. **Space** = talk without the wake word.
 - It starts in **read-only** mode. To let it take actions: close the window, then run `npm start -- --writes`.
 - "Bridge not reachable" = the window from step 6 was closed. Run `npm start` again.
+
+---
+
+# PART 8½ — Free local brain (optional)
+
+Follow **handbooks\TROY_LOCAL_BRAIN_HANDBOOK.md**: Steps 0–3 install Ollama and the model, Step 6
+tests it. Then in Troy: **Settings → Troy's brain → Local brain**. It chats for free and offline,
+but can't see photos/PDFs or use the laptop tools. If Claude credits run out, Troy switches to it
+by himself (when Ollama is running).
 
 ---
 

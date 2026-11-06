@@ -17,6 +17,7 @@ import streamlit as st
 from google import genai
 from PIL import Image
 
+import brain as local_brain     # free Ollama brain on the laptop (brain.py)
 import troy_laptop
 import troy_study
 
@@ -33,6 +34,7 @@ CLAUDE_MODELS = {
     "Claude Sonnet 5.5 — smarter, ~20x the cost": "claude-sonnet-5-5",
 }
 CLAUDE_MAX_REPLY_TOKENS = 4_096
+LOCAL_BRAIN = "Local brain — free, on this laptop (Ollama)"
 HISTORY_MESSAGES = 24       # how many past messages Claude sees
 FILE_MEMORY_MESSAGES = 6    # files stay attached for this many recent messages
 
@@ -878,10 +880,18 @@ with st.sidebar:
                 st.session_state.keys_rev = uuid4().hex
                 st.rerun()
         brain = "claude" if claude_key else ("gemini" if api_key else None)
-        claude_model = CLAUDE_MODELS[
-            st.selectbox("Troy's brain", list(CLAUDE_MODELS), disabled=brain != "claude")
-        ]
-        if brain == "claude":
+        brain_choice = st.selectbox(
+            "Troy's brain", list(CLAUDE_MODELS) + ([LOCAL_BRAIN] if LAPTOP else []),
+            disabled=brain != "claude" and not LAPTOP,
+        )
+        claude_model = CLAUDE_MODELS.get(brain_choice, "claude-haiku-5-5")
+        if brain_choice == LOCAL_BRAIN:
+            brain = "local"
+        if brain == "local":
+            _ls = local_brain.status()
+            st.caption(("AI brain: local Ollama (" + _ls["model"] + ") — free, offline, no tools"
+                        if _ls["ok"] else "⚠️ Local brain not ready: " + _ls["reason"]))
+        elif brain == "claude":
             st.caption("AI brain: Claude — no daily limit (uses your Console credits)")
         elif brain == "gemini":
             st.caption("AI brain: Gemini free tier (20 messages a day)")
@@ -1239,6 +1249,31 @@ def finish_laptop(out):
     return answer
 
 
+def _plain(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "[a file]") if b.get("type") == "text" else "[a file]"
+                     for b in content)
+
+
+def ask_local(files, text):
+    """Free brain.py answer: text only (it can't see pictures, PDFs or use tools)."""
+    notes = [f"File {f['name']}:\n" + f["data"].decode("utf-8", errors="replace")[:20000]
+             for f in files if not f["mime"].startswith("image/") and f["mime"] != "application/pdf"]
+    skipped = [f["name"] for f in files if f["mime"].startswith("image/") or f["mime"] == "application/pdf"]
+    history = [{"role": m["role"], "content": _plain(m["content"])}
+               for m in st.session_state.claude_history[-HISTORY_MESSAGES:]]
+    with st.spinner("Troy's local brain is thinking (can take 10-60 seconds)..."):
+        answer = local_brain.think(
+            text, context=with_today(TROY_INSTRUCTIONS) + "\n\n".join(notes), history=history)
+    if skipped:
+        answer += ("\n\n(The local brain can't open " + ", ".join(skipped) +
+                   ". Switch Troy's brain to Claude for photos and PDFs.)")
+    st.session_state.claude_history.append({"role": "user", "content": text})
+    st.session_state.claude_history.append({"role": "assistant", "content": answer})
+    return answer
+
+
 def transcribe(audio_bytes, mime):
     """Claude can't hear audio, so Gemini writes down what Paul said."""
     last_error = None
@@ -1287,8 +1322,18 @@ def send_to_troy(user_text, files, text, audio=None):
     st.session_state.messages.append({"role": "user", "text": user_text})
     st.session_state.hide_keyboard = True
     try:
-        if brain == "claude":
-            answer = ask_claude(files, text)
+        if brain == "local":
+            answer = ask_local(files, text)
+        elif brain == "claude":
+            try:
+                answer = ask_claude(files, text)
+            except Exception as e:
+                # Out of Claude credits on the laptop? Answer with the free local brain.
+                if LAPTOP and "credit balance" in str(e).lower() and local_brain.status()["ok"]:
+                    answer = ("(Claude credits ran out, so Troy's free local brain answered. "
+                              "It can't use the laptop tools.)\n\n" + ask_local(files, text))
+                else:
+                    raise
             if answer is None:          # waiting on the Allow / Deny box
                 save_current()
                 return
@@ -1355,6 +1400,8 @@ STUDY_STYLES = {
 def ask_brain_once(task, section, max_tokens=1200):
     """One-off question about a section (doesn't touch the chat history)."""
     content = f"Document: {st.session_state.study['name']}\n\nSECTION:\n{section}\n\nTASK:\n{task}"
+    if brain == "local":
+        return local_brain.think(with_today(STUDY_SYSTEM) + "\n\n" + content)
     if brain == "claude":
         r = st.session_state.claude.messages.create(
             model=claude_model, max_tokens=max_tokens, system=with_today(STUDY_SYSTEM),
@@ -1439,7 +1486,7 @@ def read_page_picture(claude_client, gemini_client, jpeg, n):
 
 def read_pdf_by_eye(job):
     """Read every page picture (4 at a time) and start studying the result."""
-    claude_client = st.session_state.claude if brain == "claude" else None
+    claude_client = st.session_state.get("claude") if brain in ("claude", "local") else None
     gemini_client = st.session_state.get("client") if brain == "gemini" else None
     images = list(troy_study.page_images(job["data"]))
     texts = [""] * len(images)
@@ -1632,7 +1679,8 @@ def render_study():
             why = ("its words are stored as font codes"
                    if job["why"] == "garbled" else "it's scanned pictures of pages")
             st.markdown(f"**📄 {html.escape(job['name'])}** — {n} pages")
-            if brain == "claude" or (brain == "gemini" and n <= 15):
+            if (brain == "claude" or (brain == "local" and st.session_state.get("claude"))
+                    or (brain == "gemini" and n <= 15)):
                 # Troy handles it himself: read the page pictures, then study.
                 st.caption(f"This PDF can't be read for free because {why}, so Troy is "
                            "reading the pages himself (about 2¢ per 40 pages, one time — "
@@ -1844,10 +1892,10 @@ elif prompt or send_voice or ask_about_files:
         mime = voice_audio.type or "audio/wav"
         if len(audio_bytes) > MAX_AUDIO_BYTES:
             st.warning("That recording is too large. Please record a shorter message.")
-        elif brain == "claude" and not api_key:
+        elif brain in ("claude", "local") and not api_key:
             st.warning("Voice messages need the Gemini key. For now, tap the 🎤 on your "
                        "keyboard and talk — it types for you.")
-        elif brain == "claude":
+        elif brain in ("claude", "local"):
             try:
                 with st.spinner("Listening..."):
                     words = transcribe(audio_bytes, mime)
