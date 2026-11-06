@@ -414,6 +414,12 @@ st.markdown(
         border: 1px solid rgba(128, 128, 128, 0.45) !important;
         border-radius: 50% !important;
     }
+    [data-testid="stChatInputMicButton"].troy-listening {
+        background: #e5484d !important; color: #fff !important; border-color: #e5484d !important;
+        animation: troyPulse 1.1s ease-in-out infinite;
+    }
+    @keyframes troyPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(229,72,77,.55); }
+                           50% { box-shadow: 0 0 0 9px rgba(229,72,77,0); } }
     [data-testid="stChatInputSubmitButton"] {
         background: #0ea5a4 !important;
         color: #ffffff !important;
@@ -596,7 +602,76 @@ try:
 except Exception:
     api_key = os.environ.get("GEMINI_API_KEY", "")
 
+# Talk-to-type: tapping the mic types Paul's words straight into the message box
+# as he talks (the browser's own speech recognition, free, no Gemini needed),
+# then sends them by itself when he stops talking. Tap the mic again to stop
+# early. Browsers without speech recognition keep Streamlit's record-and-send mic.
+DICTATE_JS = """
+<script>
+(() => {
+  if (window.troyDictate) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;                       // keep the normal mic
+  window.troyDictate = true;
+  let rec = null, listening = false, cancelled = false, base = "", said = "";
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+  const box = () => document.querySelector('[data-testid="stChatInputTextArea"]');
+  const mic = () => document.querySelector('[data-testid="stChatInputMicButton"]');
+  function put(text) {
+    const ta = box(); if (!ta) return;
+    setter.call(ta, text);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  function show(on) { const m = mic(); if (m) m.classList.toggle("troy-listening", on); }
+  function send() {
+    const b = document.querySelector('[data-testid="stChatInputSubmitButton"]');
+    if (b && !b.disabled) b.click();
+  }
+  function start() {
+    if (window.troyAudio) window.troyAudio.stop();
+    else if (window.speechSynthesis) speechSynthesis.cancel();     // stop Troy talking
+    rec = new SR();
+    rec.lang = "en-US"; rec.interimResults = true; rec.continuous = false;
+    const ta = box();
+    base = ta && ta.value.trim() ? ta.value.trim() + " " : "";
+    said = ""; cancelled = false;
+    rec.onresult = (e) => {
+      let t = "";
+      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      said = t.trim();
+      put(base + said);
+    };
+    rec.onerror = (e) => {
+      cancelled = true;
+      const ta2 = box();
+      if (ta2 && (e.error === "not-allowed" || e.error === "service-not-allowed"))
+        ta2.placeholder = "Microphone is blocked: click the lock or 🎤 in the address bar and choose Allow.";
+    };
+    rec.onend = () => {
+      listening = false; show(false);
+      if (!cancelled && said) setTimeout(send, 250);   // stopped talking: send it
+    };
+    listening = true; show(true);
+    try { rec.start(); } catch (err) { listening = false; show(false); }
+  }
+  // Take over the mic button's click before Streamlit sees it.
+  window.addEventListener("click", (e) => {
+    const m = e.target.closest && e.target.closest('[data-testid="stChatInputMicButton"]');
+    if (!m) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    if (listening && rec) rec.stop(); else start();
+  }, true);
+  ["pointerdown", "mousedown", "touchstart"].forEach(ev => window.addEventListener(ev, (e) => {
+    if (e.target.closest && e.target.closest('[data-testid="stChatInputMicButton"]')) {
+      e.stopPropagation(); e.stopImmediatePropagation();
+    }
+  }, true));
+})();
+</script>
+"""
+
 st.html(SPEAKER_JS, unsafe_allow_javascript=True)
+st.html(DICTATE_JS, unsafe_allow_javascript=True)
 auto_speak = st.toggle(
     "🔊 Troy speaks out loud", value=True, key="voice_on",
     help="On: Troy reads every reply aloud by himself. Off: he stays quiet.",
