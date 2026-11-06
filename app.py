@@ -367,72 +367,88 @@ st.markdown(
         margin-bottom: calc(0.5rem + var(--troy-lift, 0px) + env(safe-area-inset-bottom)) !important;
         transition: margin-bottom 0.2s ease;
     }
+    /* Slim message box like Claude's: one rounded row (text + send), with a
+       small + and mic sitting underneath on the left, out of the way. */
     [data-testid="stChatInput"] {
-        border-radius: 1.6rem !important;
-        border: 1px solid rgba(128, 128, 128, 0.45) !important;
-        background: rgba(128, 128, 128, 0.12) !important;
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
-        padding: 0.3rem 0.45rem 0.3rem 0.6rem;
+        position: relative !important;
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 0 0 1.85rem 0 !important;
     }
-    [data-testid="stChatInput"]:focus-within {
-        border-color: #0ea5a4 !important;
+    [data-testid="stChatInput"]::before {
+        content: ""; position: absolute; left: 0; right: 0; top: 0; bottom: 1.85rem;
+        border: 1px solid rgba(128, 128, 128, 0.45); border-radius: 1.5rem;
+        background: rgba(128, 128, 128, 0.12); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
+        pointer-events: none; z-index: 0;
     }
+    [data-testid="stChatInput"]:focus-within::before { border-color: #0ea5a4; }
     /* one box only (Streamlit draws a second one inside) */
     [data-testid="stChatInput"] > div {
         background: transparent !important;
         border: none !important;
+        position: static !important;
     }
-    /* text on its own full-width row, buttons underneath (like Claude) */
     [data-testid="stChatInput"] > div > div {
-        flex-wrap: wrap !important;
+        flex-wrap: nowrap !important;
         align-items: center;
-        row-gap: 0;
+        position: static !important;
+        padding: 0.12rem 0.3rem 0.12rem 0.9rem;
+        z-index: 1;
     }
     [data-testid="stChatInput"] > div > div > div:has(textarea) {
         order: 0;
-        flex: 1 1 100% !important;
-        width: 100% !important;
-    }
-    [data-testid="stChatInput"] > div > div > div:has([data-testid="stChatInputFileUploadButton"]) {
-        order: 1;
+        flex: 1 1 auto !important;
+        position: relative; z-index: 1;
     }
     [data-testid="stChatInput"] > div > div > div:has([data-testid="stChatInputSubmitButton"]) {
-        order: 2;
-        margin-left: auto;
-        gap: 0.4rem;
+        order: 1;
+        position: static !important;
+        z-index: 1;
     }
     [data-testid="stChatInput"] textarea {
-        font-size: 1.1rem !important;
-        line-height: 1.4 !important;
-        min-height: 2.2rem;
-        padding-left: 0.25rem !important;
-        padding-top: 0.45rem !important;
-        padding-bottom: 0.2rem !important;
+        font-size: 1.05rem !important;
+        line-height: 1.35 !important;
+        min-height: 1.6rem !important;
+        padding: 0.4rem 0.2rem 0.4rem 0.1rem !important;
+    }
+    [data-testid="InputInstructions"] { display: none !important; }
+    /* small + and mic under the box, no circles */
+    [data-testid="stChatInput"] > div > div > div:has([data-testid="stChatInputFileUploadButton"]) {
+        position: absolute !important; left: 0.35rem; bottom: 0; z-index: 2;
+    }
+    [data-testid="stChatInputMicButton"] {
+        position: absolute !important; left: 2.35rem; bottom: 0; z-index: 2;
     }
     [data-testid="stChatInputFileUploadButton"] button,
     [data-testid="stChatInputMicButton"] {
-        border: 1px solid rgba(128, 128, 128, 0.45) !important;
+        border: none !important;
+        background: transparent !important;
         border-radius: 50% !important;
+        width: 1.7rem !important; height: 1.7rem !important;
+        min-width: 1.7rem !important; min-height: 1.7rem !important;
+        padding: 0 !important; opacity: 0.75;
     }
+    [data-testid="stChatInputFileUploadButton"] button:hover,
+    [data-testid="stChatInputMicButton"]:hover { opacity: 1; background: rgba(128,128,128,0.2) !important; }
+    [data-testid="stChatInputFileUploadButton"] svg,
+    [data-testid="stChatInputMicButton"] svg { width: 1.1rem; height: 1.1rem; }
     [data-testid="stChatInputMicButton"].troy-listening {
-        background: #e5484d !important; color: #fff !important; border-color: #e5484d !important;
+        background: #e5484d !important; color: #fff !important; opacity: 1;
         animation: troyPulse 1.1s ease-in-out infinite;
     }
     @keyframes troyPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(229,72,77,.55); }
-                           50% { box-shadow: 0 0 0 9px rgba(229,72,77,0); } }
+                           50% { box-shadow: 0 0 0 7px rgba(229,72,77,0); } }
     [data-testid="stChatInputSubmitButton"] {
         background: #0ea5a4 !important;
         color: #ffffff !important;
         border-radius: 50% !important;
-        width: 2.4rem !important;
-        height: 2.4rem !important;
+        width: 2rem !important; height: 2rem !important;
+        min-width: 2rem !important; min-height: 2rem !important;
     }
+    [data-testid="stChatInputSubmitButton"] svg { width: 1.05rem; height: 1.05rem; }
     [data-testid="stChatInputSubmitButton"]:disabled {
         opacity: 0.45;
-    }
-    [data-testid="stChatInput"] button {
-        min-width: 2.4rem;
-        min-height: 2.4rem;
     }
     .troy-study-doc { opacity: 0.75; font-size: 0.95rem; margin-bottom: 0.25rem; }
     .troy-study-group { color: #0ea5a4; font-weight: 700; letter-spacing: 0.04em;
