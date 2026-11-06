@@ -95,7 +95,8 @@ def _tidy(text: str) -> str:
         if not ln:
             out.append("")
             continue
-        starts_new = bool(re.match(r"^([a-z]\.|\d+\.|[•\-–▪●○]|\(?[a-z0-9]\))\s", ln, re.I))
+        # A new list item or form field starts a new line: "a.", "2.", "3).", "(b)", "•", "☐"
+        starts_new = bool(re.match(r"^([a-z]\.|\d+\)?\.|[•\-–▪●○☐□■]|\(?[a-z0-9]\)\.?)\s", ln, re.I))
         if out and out[-1] and not starts_new and not out[-1].endswith((":", ".", "?", "!")):
             out[-1] += " " + ln
         else:
@@ -172,6 +173,23 @@ def split_page_texts(page_texts: list[str]) -> dict:
     return _split_pages(pages)
 
 
+def page_image(pdf_bytes: bytes, page_no: int, max_side: int = 1400) -> bytes:
+    """One page (1 = first) as a JPEG, for showing Paul the real page."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(pdf_bytes)
+    try:
+        page = doc[page_no - 1]
+        w, h = page.get_size()
+        img = page.render(scale=max_side / max(w, h)).to_pil().convert("RGB")
+        page.close()
+        out = io.BytesIO()
+        img.save(out, "JPEG", quality=85)
+        return out.getvalue()
+    finally:
+        doc.close()
+
+
 def page_images(pdf_bytes: bytes, max_side: int = 1600):
     """Yield each page as JPEG bytes (for reading by eye when the text is codes)."""
     import pypdfium2 as pdfium
@@ -194,22 +212,27 @@ def page_images(pdf_bytes: bytes, max_side: int = 1600):
 def _split_pages(pages: list[list[str]]) -> dict:
     n_pages = len(pages)
 
-    # Walk every line; a heading opens a new section.
-    raw = []          # [num, title, [lines]]
-    intro = []
-    for lines in pages:
+    # Walk every line; a heading opens a new section. Remember which pages each
+    # section sits on, so Troy can show the real page picture beside the words.
+    raw = []          # [num, title, [lines], {page numbers}]
+    intro, intro_pages = [], set()
+    for pno, lines in enumerate(pages, 1):
         for ln in lines:
             h = _is_heading(ln)
             if h:
-                raw.append([h[0], h[1], []])
+                raw.append([h[0], h[1], [], {pno}])
             elif raw:
                 raw[-1][2].append(ln)
+                if ln.strip():
+                    raw[-1][3].add(pno)
             else:
                 intro.append(ln)
+                if ln.strip():
+                    intro_pages.add(pno)
 
     sections = []
     parent = None     # e.g. ("4.0", "RESPONSIBILITIES") with only 4.1, 4.2 under it
-    for num, title, body_lines in raw:
+    for num, title, body_lines, on_pages in raw:
         body = _tidy("\n".join(body_lines))
         if len(body) < MIN_BODY_CHARS:
             # A table-of-contents entry, or a heading whose only content is
@@ -223,6 +246,7 @@ def _split_pages(pages: list[list[str]]) -> dict:
             parent = None
         for part in _split_long(num, title, body):
             part["group"] = group
+            part["pages"] = sorted(on_pages)
             sections.append(part)
 
     if len(sections) >= 3:
@@ -230,6 +254,7 @@ def _split_pages(pages: list[list[str]]) -> dict:
         if len(intro_text) >= 200:
             first = _split_long("", "Opening page", intro_text)[0]
             first["group"] = ""
+            first["pages"] = sorted(intro_pages) or [1]
             sections.insert(0, first)
         return {"sections": sections, "pages": n_pages, "method": "headings"}
 
@@ -240,6 +265,7 @@ def _split_pages(pages: list[list[str]]) -> dict:
         if body:
             for part in _split_long("", f"Page {i}", body):
                 part["group"] = ""
+                part["pages"] = [i]
                 by_page.append(part)
     return {"sections": by_page, "pages": n_pages, "method": "pages"}
 

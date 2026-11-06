@@ -435,8 +435,9 @@ st.markdown(
         line-height: 1.25; margin: 0.2rem 0 0.5rem; }
     .troy-study-label { opacity: 0.65; font-size: 0.9rem; margin-top: 0.75rem; }
     .troy-read { font-size: 1.2rem; line-height: 1.65; border: 1px solid rgba(128,128,128,0.3);
-        border-radius: 1rem; padding: 0.9rem 1rem; background: rgba(128,128,128,0.06); }
-    .troy-read p { margin: 0 0 0.8rem; }
+        border-radius: 1rem; padding: 0.9rem 1rem; background: rgba(128,128,128,0.06);
+        max-height: 560px; overflow-y: auto; position: relative; }
+    .troy-read p { margin: 0 0 0.45rem; }
     .troy-read p:last-child { margin-bottom: 0; }
     .troy-read .ts { cursor: pointer; border-radius: 0.3rem; padding: 0.05rem 0.1rem;
         transition: background 0.2s; }
@@ -1437,11 +1438,14 @@ def load_study_pdf(name, data):
                                       "pages": result["pages"], "why": result["method"]}
         st.session_state.study = None
         return
-    start_study(name, result["sections"])
+    start_study(name, result["sections"], data)
 
 
-def start_study(name, sections):
+def start_study(name, sections, data=None):
     st.session_state.study_ocr = None
+    # The PDF itself stays in this visit only (too big to save on the device),
+    # so Troy can show the real page next to the words.
+    st.session_state.study_pdf = {"name": name, "data": data} if data else None
     st.session_state.study = {
         "name": name, "sections": sections, "idx": 0,
         "qa": {}, "updated": time.time(),
@@ -1514,7 +1518,7 @@ def read_pdf_by_eye(job):
         st.session_state.study_note = "Troy looked at every page but found no words to read."
         st.session_state.study_ocr = None
         return
-    start_study(job["name"], result["sections"])
+    start_study(job["name"], result["sections"], job["data"])
 
 
 def save_study_progress():
@@ -1583,10 +1587,14 @@ READ_ALONG_JS = """
       u.rate = RATE;
       if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch (e) {} }
       u.onstart = () => { clear(); sp.classList.add("on");
+        // Keep the spoken sentence in the middle of the words box...
+        const want = sp.offsetTop - box.clientHeight / 3;
+        if (box.scrollHeight > box.clientHeight) box.scrollTo({ top: Math.max(0, want), behavior: "smooth" });
+        // ...and keep the box itself on screen (not hidden under the message box).
         const sc = document.querySelector('[data-testid="stAppScrollToBottomContainer"]');
-        if (sc) { const r = sp.getBoundingClientRect(), h = sc.getBoundingClientRect();
-          if (r.bottom > h.bottom - 140 || r.top < h.top + 90)
-            sc.scrollBy({ top: r.top - h.top - 120, behavior: "smooth" }); } };
+        if (sc) { const r = box.getBoundingClientRect(), h = sc.getBoundingClientRect();
+          const hidden = r.top < h.top + 40 || Math.min(r.bottom, r.top + 300) > h.bottom - 190;
+          if (hidden) sc.scrollBy({ top: r.top - h.top - 70, behavior: "smooth" }); } };
       if (k === spans.length - i0 - 1) u.onend = () => clear();
       speechSynthesis.speak(u);
     });
@@ -1598,9 +1606,32 @@ READ_ALONG_JS = """
 """
 
 
+@st.cache_data(max_entries=60, show_spinner=False)
+def page_picture(pdf_bytes, page_no):
+    return troy_study.page_image(pdf_bytes, page_no)
+
+
+def show_pages(sec):
+    """The real PDF page(s) for this section, so Paul sees it laid out like the paper."""
+    pdf = st.session_state.get("study_pdf")
+    pages = sec.get("pages") or []
+    if not pdf or pdf["name"] != st.session_state.study["name"]:
+        st.caption("Add the PDF again (＋) to see the real pages here.")
+        return
+    if not pages:
+        st.caption("Troy can't tell which page this part is on.")
+        return
+    with st.container(height=560, key="study_pages", border=True):
+        for p in pages[:4]:
+            try:
+                st.image(page_picture(pdf["data"], p), caption=f"Page {p}", width="stretch")
+            except Exception:
+                st.caption(f"Couldn't draw page {p}.")
+
+
 def read_along(sec, autoplay, rate):
     box_id = f"troy-read-{uuid4().hex}"
-    paras = [p for p in re.split(r"\n\s*\n", sec["text"]) if p.strip()] or [sec["text"]]
+    paras = [p for p in re.split(r"\n", sec["text"]) if p.strip()] or [sec["text"]]
     out, i = [], 0
     for p in paras:
         spans = []
@@ -1737,7 +1768,18 @@ def render_study():
     ) or "1×"
     rate = float(speed.rstrip("×"))
     autoplay = st.session_state.pop("study_autoread", False) and auto_speak
-    read_along(sec, autoplay, rate)
+    view = st.segmented_control(
+        "View", ["Page + words", "Words only"], default="Page + words",
+        key="study_view", label_visibility="collapsed",
+    ) or "Page + words"
+    if view == "Page + words":
+        left, right = st.columns([3, 2], gap="medium")
+        with left:
+            show_pages(sec)
+        with right:
+            read_along(sec, autoplay, rate)
+    else:
+        read_along(sec, autoplay, rate)
 
     nav = st.container(horizontal=True, key="study_nav", gap="small")
     if nav.button("Back", key="study_prev", icon=":material/skip_previous:", disabled=idx == 0):
