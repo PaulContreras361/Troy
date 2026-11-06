@@ -1350,7 +1350,7 @@ def read_pdf_by_eye(job):
     gemini_client = st.session_state.get("client") if brain == "gemini" else None
     images = list(troy_study.page_images(job["data"]))
     texts = [""] * len(images)
-    bar = st.progress(0.0, text=f"Troy is reading page 1 of {len(images)}…")
+    bar = st.progress(0.0, text=f"Troy is reading the pages himself… 0 of {len(images)}")
     done, failed = 0, []
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(read_page_picture, claude_client, gemini_client, img, i + 1): i
@@ -1362,7 +1362,8 @@ def read_pdf_by_eye(job):
             except Exception:
                 failed.append(i)
             done += 1
-            bar.progress(done / len(images), text=f"Troy has read {done} of {len(images)} pages…")
+            bar.progress(done / len(images),
+                         text=f"Troy is reading the pages himself… {done} of {len(images)}")
     for i in failed:  # one more try for any page that failed
         try:
             texts[i] = read_page_picture(claude_client, gemini_client, images[i], i + 1)
@@ -1535,24 +1536,23 @@ def render_study():
         job = st.session_state.get("study_ocr")
         if job:
             n = job["pages"]
-            why = ("its font stores the letters as codes, so the words come out as gibberish"
+            why = ("its words are stored as font codes"
                    if job["why"] == "garbled" else "it's scanned pictures of pages")
-            cents = max(1, round(n * 0.06))
-            minutes = max(1, round(n / 4 * 8 / 60))
             st.markdown(f"**📄 {html.escape(job['name'])}** — {n} pages")
-            st.info(f"Troy can't pull the words out of this PDF for free because {why}. "
-                    f"He can read the pages with Claude's eyes instead and type out the exact "
-                    f"words: about {cents}¢ and {minutes} minute{'s' if minutes > 1 else ''}, "
-                    "one time only — the result is saved so it never has to be done again.")
-            if brain == "gemini" and n > 15:
-                st.warning("Your free Gemini brain allows about 20 requests a day — not enough "
-                           "for this many pages. Add your Claude key in Settings first.")
-            row = st.container(horizontal=True, key="ocr_row", gap="small")
-            if row.button("Read it with Claude's eyes", key="ocr_go", type="primary",
-                          icon=":material/visibility:", disabled=not brain):
+            if brain == "claude" or (brain == "gemini" and n <= 15):
+                # Troy handles it himself: read the page pictures, then study.
+                st.caption(f"This PDF can't be read for free because {why}, so Troy is "
+                           "reading the pages himself (about 2¢ per 40 pages, one time — "
+                           "it's saved afterward).")
                 read_pdf_by_eye(job)
                 st.rerun()
-            if row.button("Cancel", key="ocr_cancel", type="tertiary"):
+            elif brain == "gemini":
+                st.warning(f"This PDF needs to be read page by page because {why}, and "
+                           f"{n} pages is more than Troy's free Gemini brain allows in a day. "
+                           "Add your Claude key in Settings and add the PDF again.")
+            else:
+                st.warning("Add Troy's Claude key in Settings, then add the PDF again.")
+            if st.button("Cancel", key="ocr_cancel", type="tertiary"):
                 st.session_state.study_ocr = None
                 st.rerun()
         choices = st.session_state.get("zip_pdfs")
