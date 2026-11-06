@@ -20,3 +20,9 @@ venv/
 # Local logs and saved chats (keep private)
 *.log
 chat_history.json
+
+# Laptop Troy working folders (stay on the laptop)
+troy_data/
+troy_logs/
+troy_trash/
+troy_workspace/

@@ -46,6 +46,16 @@ python -m streamlit run app.py
 
 On Windows, run that from your Troy folder in CMD. `python -m` works even when `streamlit` isn't on your PATH.
 
+## On Paul's Windows laptop (laptop powers)
+
+The same app gains real tools when it runs on Windows (never on the phone/cloud):
+screen, mouse and keyboard, safe file actions (troy_hands), AutoCAD, SketchUp Pro,
+Outlook (drafts only, never sends) and the read-only EPR checker. A leash in
+Settings (OFF / LOOK / DO / DRIVE) limits what Troy may do, and an Allow / Deny box
+stops risky steps. Start with `Install Troy.bat`, then `Start Troy.bat`.
+Full baby-step guide: `handbooks/TROY_LAPTOP_HANDBOOK.md`.
+
+
 ## GitHub Codespaces
 
 If you are running this project in GitHub Codespaces:

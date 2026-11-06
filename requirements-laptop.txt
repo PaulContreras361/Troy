@@ -1,0 +1,10 @@
+# Extra parts for Troy's laptop powers (Windows only). The phone/cloud Troy doesn't use these.
+pyautogui>=0.9.54        # mouse, keyboard, screenshots
+psutil>=5.9              # CPU, memory, running programs
+pywin32>=306             # AutoCAD, Outlook, desktop shortcut (Windows COM)
+openpyxl>=3.1            # EPR workbook checker (read-only)
+# Troy Hotkey (hold Ctrl+Alt+Space and talk)
+keyboard>=0.13.5
+sounddevice>=0.4.6
+numpy>=1.26
+faster-whisper>=1.0

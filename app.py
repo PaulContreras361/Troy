@@ -17,7 +17,10 @@ import streamlit as st
 from google import genai
 from PIL import Image
 
+import troy_laptop
 import troy_study
+
+LAPTOP = troy_laptop.available()   # Windows laptop only, never the phone/cloud
 
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
@@ -750,6 +753,7 @@ def history_for_brain(msgs):
 def start_new_chat():
     st.session_state.messages = []
     st.session_state.claude_history = []
+    st.session_state.pop("laptop_pending", None)
     st.session_state.chat_id = None
     new_gemini_chat()
 
@@ -759,9 +763,12 @@ def open_chat(cid):
     st.session_state.messages = [dict(m) for m in chat["messages"]]
     hist = history_for_brain(chat["messages"])
     st.session_state.claude_history = hist
+    st.session_state.pop("laptop_pending", None)
     st.session_state.chat_id = cid
     new_gemini_chat(hist)
 
+
+lap_level, lap_auto = 0, 0
 
 with st.sidebar:
     store = troy_store()(
@@ -881,6 +888,24 @@ with st.sidebar:
         else:
             st.caption("AI brain: waiting for a key")
         st.caption("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
+        if LAPTOP:
+            lap = troy_laptop.load_settings()
+            lap_names = [f"{n} · {troy_laptop.LEVEL_NAMES[n]}" for n in range(4)]
+            lap_level = int(st.select_slider(
+                "Laptop powers", lap_names, value=lap_names[lap["level"]], key="lap_level",
+                help="OFF: talk only. LOOK: files, screen, AutoCAD/SketchUp/email reading. "
+                "DO: open apps, draw, write email drafts, file moves (with Allow). "
+                "DRIVE: mouse, keyboard, AutoCAD command line. Troy can't raise this himself.",
+            )[0])
+            lap_auto = int(st.select_slider(
+                "Run without asking, up to", lap_names[: lap_level + 1] or lap_names[:1],
+                value=lap_names[min(lap["auto"], lap_level)], key="lap_auto",
+                help="Steps above this stop for an Allow / Deny box. File changes, saves and "
+                "AutoCAD commands always ask.",
+            )[0]) if lap_level > 0 else 0
+            if (lap_level, lap_auto) != (lap["level"], lap["auto"]):
+                troy_laptop.save_settings(lap_level, lap_auto)
+            st.caption("🛑 Emergency stop: slam the mouse into the top-left corner.")
         st.caption("Chats are saved on this device only.")
 
     st.markdown('<div class="troy-side-label">Recents</div>', unsafe_allow_html=True)
@@ -949,6 +974,8 @@ def make_voice(msg):
 for msg in ([] if st.session_state.study_on else st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["text"])
+        if msg.get("tools"):
+            st.caption(msg["tools"])
         if msg["role"] == "assistant":
             autoplay = msg.pop("autoplay", False) and auto_speak
             if msg.pop("pending_voice", False):
@@ -969,6 +996,24 @@ if not st.session_state.study_on and st.session_state.get("last_pdf"):
         st.session_state.study_on = True
         st.session_state.study_load = st.session_state.last_pdf
         st.rerun()
+
+_pending = st.session_state.get("laptop_pending")
+if _pending and not st.session_state.study_on:
+    with st.container(border=True, key="allow_box"):
+        st.markdown("**Troy wants to do this — okay?**")
+        if _pending.get("text"):
+            st.caption(_pending["text"])
+        for _c in _pending["calls"]:
+            if _c["asked"]:
+                st.code(_c["plan"], language=None, wrap_lines=True)
+            else:
+                st.caption("Also: " + _c["plan"])
+        _yes, _no = st.columns(2)
+        if _yes.button("Allow", key="allow_yes", type="primary", icon=":material/check:",
+                       width="stretch"):
+            st.session_state.allow_choice = True
+        if _no.button("Deny", key="allow_no", icon=":material/close:", width="stretch"):
+            st.session_state.allow_choice = False
 
 # One message box, like Claude's: ＋ for files, the text, a mic, and send.
 submission = st.chat_input(
@@ -1146,6 +1191,14 @@ def ask_claude(files, text):
         {"role": "user", "content": claude_blocks(files, text)}
     )
     try:
+        if LAPTOP and lap_level > 0:
+            with st.spinner("Troy is working on it..."):
+                out = troy_laptop.run(
+                    st.session_state.claude, claude_model, laptop_system(),
+                    messages=claude_messages(), level=lap_level, auto=lap_auto,
+                    max_tokens=CLAUDE_MAX_REPLY_TOKENS,
+                )
+            return finish_laptop(out)
         response = st.session_state.claude.messages.create(
             model=claude_model,
             max_tokens=CLAUDE_MAX_REPLY_TOKENS,
@@ -1157,6 +1210,32 @@ def ask_claude(files, text):
         raise
     answer = "".join(b.text for b in response.content if getattr(b, "type", "") == "text")
     st.session_state.claude_history.append({"role": "assistant", "content": answer or "(no reply)"})
+    return answer
+
+
+def laptop_system():
+    return with_today(TROY_INSTRUCTIONS) + troy_laptop.instructions(lap_level, lap_auto)
+
+
+def used_note(used):
+    if not used:
+        return ""
+    return "🛠️ " + ", ".join(
+        u["name"] + (" (denied)" if u.get("denied") else (" ✓" if u["ok"] else " ✗")) for u in used
+    )
+
+
+def finish_laptop(out):
+    """A finished laptop task becomes a normal reply; a paused one waits for Allow / Deny."""
+    if out["type"] == "approval":
+        st.session_state.laptop_pending = out
+        return None
+    answer = out["text"] or "Done."
+    note = used_note(out["used"])
+    st.session_state.laptop_used = note
+    # Troy remembers what he did, without the screenshots.
+    st.session_state.claude_history.append(
+        {"role": "assistant", "content": answer + (f"\n\n[{note}]" if note else "")})
     return answer
 
 
@@ -1201,11 +1280,18 @@ def send_to_troy(user_text, files, text, audio=None):
     for f in files:
         if f["mime"] == "application/pdf":
             st.session_state.last_pdf = {"name": f["name"], "data": f["data"]}
+    if st.session_state.pop("laptop_pending", None):
+        # Paul moved on instead of answering the Allow box: that step counts as denied.
+        st.session_state.claude_history.append(
+            {"role": "assistant", "content": "(Paul skipped the step I asked about.)"})
     st.session_state.messages.append({"role": "user", "text": user_text})
     st.session_state.hide_keyboard = True
     try:
         if brain == "claude":
             answer = ask_claude(files, text)
+            if answer is None:          # waiting on the Allow / Deny box
+                save_current()
+                return
         else:
             message = gemini_parts(files) + ([audio] if audio else []) + [text]
             response = st.session_state.chat.send_message(
@@ -1218,7 +1304,14 @@ def send_to_troy(user_text, files, text, audio=None):
     except Exception as e:
         answer = explain_error(e)
         ok = False
+    add_reply(answer, ok)
+
+
+def add_reply(answer, ok):
     reply = {"role": "assistant", "text": answer, "autoplay": auto_speak}
+    used = st.session_state.pop("laptop_used", "")
+    if used:
+        reply["tools"] = used
     if (ok and auto_speak and use_human_voice and api_key
             and not st.session_state.get("tts_off_today")):
         # Show the text now; the voice is made right after it appears.
@@ -1774,3 +1867,28 @@ elif prompt or send_voice or ask_about_files:
         text = prompt or "Please read the attached file(s) and help me understand them."
         send_to_troy(text + file_label(attached), parts, text)
         st.rerun()
+
+
+# ---- Paul answered the Allow / Deny box (handled last, once everything is defined) ----
+def resume_laptop(allow):
+    pending = st.session_state.pop("laptop_pending")
+    try:
+        with st.spinner("Troy is working on it..." if allow else "Okay, skipping that..."):
+            out = troy_laptop.run(
+                st.session_state.claude, claude_model, laptop_system(), state=pending["state"],
+                allow=allow, level=lap_level, auto=lap_auto, max_tokens=CLAUDE_MAX_REPLY_TOKENS,
+            )
+        answer, ok = finish_laptop(out), True
+    except Exception as e:
+        st.session_state.claude_history.append(
+            {"role": "assistant", "content": "(That step failed partway.)"})
+        answer, ok = explain_error(e), False
+    if answer is not None:
+        add_reply(answer, ok)
+    save_current()
+    st.rerun()
+
+
+if "allow_choice" in st.session_state and st.session_state.get("laptop_pending"):
+    resume_laptop(st.session_state.pop("allow_choice"))
+st.session_state.pop("allow_choice", None)
