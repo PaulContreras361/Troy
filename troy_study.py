@@ -131,16 +131,68 @@ def _split_long(num: str, title: str, body: str) -> list[dict]:
     ]
 
 
+def garbled(text: str) -> bool:
+    """True when the "words" pulled out are font codes, not words.
+
+    Some company PDFs use fonts that store letters as code numbers, so text
+    comes out like "/0/1/2/3/i255/5/i255/13/22". Real procedure text is
+    mostly letters and spaces with few slashes.
+    """
+    body = re.sub(r"\s", "", text)
+    if len(body) < 40:
+        return False
+    slashes = body.count("/") / len(body)
+    letters = sum(ch.isalpha() for ch in body) / len(body)
+    code_runs = len(re.findall(r"(?:/[A-Za-z]?\d{1,4}){4,}", text))
+    words = re.findall(r"[A-Za-z]{3,}", text)
+    word_chars = sum(len(w) for w in words) / len(body)
+    return slashes > 0.08 or code_runs >= 3 or (letters < 0.45 and word_chars < 0.35)
+
+
 def split_sections(pdf_bytes: bytes) -> dict:
     """Return {"sections": [{num, title, text}], "pages": n, "method": ...}.
 
-    method is "headings", "pages", or "scanned" (no words found).
+    method is "headings", "pages", "scanned" (no words found) or "garbled"
+    (font codes instead of words). For the last two the caller can have the
+    pages read from pictures and pass the text to split_page_texts().
     """
     pages = _strip_repeats(_page_lines(pdf_bytes))
     n_pages = len(pages)
     all_text = "\n".join("\n".join(p) for p in pages)
     if len(re.sub(r"\s", "", all_text)) < 40:
         return {"sections": [], "pages": n_pages, "method": "scanned"}
+    if garbled(all_text):
+        return {"sections": [], "pages": n_pages, "method": "garbled"}
+    return _split_pages(pages)
+
+
+def split_page_texts(page_texts: list[str]) -> dict:
+    """Same splitting, for page text that was read from page pictures."""
+    pages = _strip_repeats([[ln.rstrip() for ln in t.splitlines()] for t in page_texts])
+    return _split_pages(pages)
+
+
+def page_images(pdf_bytes: bytes, max_side: int = 1600):
+    """Yield each page as JPEG bytes (for reading by eye when the text is codes)."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(pdf_bytes)
+    try:
+        for i in range(len(doc)):
+            page = doc[i]
+            w, h = page.get_size()                      # points (1/72 inch)
+            scale = max_side / max(w, h)
+            img = page.render(scale=scale).to_pil().convert("RGB")
+            out = io.BytesIO()
+            img.save(out, "JPEG", quality=82)
+            page.close()
+            yield out.getvalue()
+    finally:
+        doc.close()
+
+
+def _split_pages(pages: list[list[str]]) -> dict:
+    n_pages = len(pages)
 
     # Walk every line; a heading opens a new section.
     raw = []          # [num, title, [lines]]

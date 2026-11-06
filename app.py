@@ -2,6 +2,7 @@ import base64
 import html
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import io
 import os
@@ -1288,19 +1289,91 @@ def load_study_pdf(name, data):
     try:
         result = troy_study.split_sections(data)
     except Exception:
-        st.warning(f"Troy couldn't open {name}. Is it a PDF?")
+        st.session_state.study_note = f"Troy couldn't open {name}. Is it a PDF?"
         return
-    if result["method"] == "scanned":
-        st.warning(f"“{name}” is scanned pictures of pages, so Troy can't pull the words out "
-                   "for free reading. You can still attach it with ＋ in a regular chat and "
-                   "ask questions about it.")
+    if result["method"] in ("scanned", "garbled"):
+        # Words can't be pulled out for free: offer to read the page pictures.
+        st.session_state.study_ocr = {"name": name, "data": data,
+                                      "pages": result["pages"], "why": result["method"]}
+        st.session_state.study = None
         return
+    start_study(name, result["sections"])
+
+
+def start_study(name, sections):
+    st.session_state.study_ocr = None
     st.session_state.study = {
-        "name": name, "sections": result["sections"], "idx": 0,
+        "name": name, "sections": sections, "idx": 0,
         "qa": {}, "updated": time.time(),
     }
     st.session_state.study_autoread = True
     save_study_progress()
+
+
+# Reading pages "by eye": each page picture goes to Claude (Haiku, cheapest),
+# which types out the exact words. Used when a PDF's font stores letters as
+# codes, or the PDF is scanned pages.
+OCR_MODEL = "claude-haiku-5-5"
+OCR_PROMPT = (
+    "This is page {n} of a work procedure. Type out every word on this page exactly as "
+    "written, in reading order. Put each numbered heading (like '2.0 SCOPE' or "
+    "'4.1 Site General Manager') on its own line exactly as printed. Keep each list item "
+    "on its own line. For tables, write each row on one line with ' | ' between cells. "
+    "Leave out the header and footer that repeat on every page (company name, document "
+    "number, revision, 'Page x of y'). Do not summarize, explain, fix, or add anything. "
+    "If the page is blank, reply with nothing."
+)
+
+
+def read_page_picture(claude_client, gemini_client, jpeg, n):
+    if claude_client is not None:
+        r = claude_client.messages.create(
+            model=OCR_MODEL, max_tokens=4000,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                             "data": base64.b64encode(jpeg).decode("ascii")}},
+                {"type": "text", "text": OCR_PROMPT.format(n=n)},
+            ]}],
+        )
+        return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
+    r = gemini_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[genai.types.Part.from_bytes(data=jpeg, mime_type="image/jpeg"),
+                  OCR_PROMPT.format(n=n)],
+    )
+    return (r.text or "").strip()
+
+
+def read_pdf_by_eye(job):
+    """Read every page picture (4 at a time) and start studying the result."""
+    claude_client = st.session_state.claude if brain == "claude" else None
+    gemini_client = st.session_state.get("client") if brain == "gemini" else None
+    images = list(troy_study.page_images(job["data"]))
+    texts = [""] * len(images)
+    bar = st.progress(0.0, text=f"Troy is reading page 1 of {len(images)}…")
+    done, failed = 0, []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(read_page_picture, claude_client, gemini_client, img, i + 1): i
+                   for i, img in enumerate(images)}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                texts[i] = fut.result()
+            except Exception:
+                failed.append(i)
+            done += 1
+            bar.progress(done / len(images), text=f"Troy has read {done} of {len(images)} pages…")
+    for i in failed:  # one more try for any page that failed
+        try:
+            texts[i] = read_page_picture(claude_client, gemini_client, images[i], i + 1)
+        except Exception as e:
+            texts[i] = f"[Troy couldn't read page {i + 1}: {explain_error(e)}]"
+    result = troy_study.split_page_texts(texts)
+    if not result["sections"]:
+        st.session_state.study_note = "Troy looked at every page but found no words to read."
+        st.session_state.study_ocr = None
+        return
+    start_study(job["name"], result["sections"])
 
 
 def save_study_progress():
@@ -1458,6 +1531,29 @@ def render_study():
             if st.button(f"Study “{name}” (the PDF you sent)", key="study_last_pdf",
                          icon=":material/description:"):
                 load_study_pdf(name, st.session_state.last_pdf["data"])
+                st.rerun()
+        job = st.session_state.get("study_ocr")
+        if job:
+            n = job["pages"]
+            why = ("its font stores the letters as codes, so the words come out as gibberish"
+                   if job["why"] == "garbled" else "it's scanned pictures of pages")
+            cents = max(1, round(n * 0.06))
+            minutes = max(1, round(n / 4 * 8 / 60))
+            st.markdown(f"**📄 {html.escape(job['name'])}** — {n} pages")
+            st.info(f"Troy can't pull the words out of this PDF for free because {why}. "
+                    f"He can read the pages with Claude's eyes instead and type out the exact "
+                    f"words: about {cents}¢ and {minutes} minute{'s' if minutes > 1 else ''}, "
+                    "one time only — the result is saved so it never has to be done again.")
+            if brain == "gemini" and n > 15:
+                st.warning("Your free Gemini brain allows about 20 requests a day — not enough "
+                           "for this many pages. Add your Claude key in Settings first.")
+            row = st.container(horizontal=True, key="ocr_row", gap="small")
+            if row.button("Read it with Claude's eyes", key="ocr_go", type="primary",
+                          icon=":material/visibility:", disabled=not brain):
+                read_pdf_by_eye(job)
+                st.rerun()
+            if row.button("Cancel", key="ocr_cancel", type="tertiary"):
+                st.session_state.study_ocr = None
                 st.rerun()
         choices = st.session_state.get("zip_pdfs")
         if choices:
