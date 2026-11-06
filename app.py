@@ -1374,9 +1374,11 @@ def add_reply(answer, ok):
 # =====================================================================
 STUDY_SYSTEM = """
 You are Troy, helping Paul study a document one section at a time.
-Use ONLY the section text you are given. Never add rules, numbers, steps, or
-requirements that are not in it. If the section doesn't answer something, say
-so plainly and, if you can tell, which kind of section would. Plain English,
+When Paul asks about the document, use ONLY the section text you are given. Never
+add rules, numbers, steps, or requirements that are not in it. If the section
+doesn't answer it, say so plainly and, if you can tell, which kind of section would.
+If Paul asks something that isn't about the document at all, just answer it as his
+helpful assistant, and say in a few words that it's not from the document. Plain English,
 warm and direct, short sentences that sound good read aloud. No markdown
 tables or headings.
 """
@@ -1888,8 +1890,9 @@ def ask_study_question(question):
     recent = s["qa"].get(str(s["idx"]), [])[-3:]
     earlier = "\n".join(f"Paul: {i['q']}\nTroy: {i['a']}" for i in recent if i["kind"] == "ask")
     task = (("Earlier questions about this section:\n" + earlier + "\n\n") if earlier else "") + \
-        f"Paul asks: {question}\nAnswer from the section. If he asks about a word or a " \
-        "sentence, explain it simply."
+        f"Paul asks: {question}\nIf it's about the document, answer from the section; if he " \
+        "asks about a word or a sentence, explain it simply. If it's about something else, " \
+        "just answer it."
     try:
         with st.spinner("Troy is thinking..."):
             ans = ask_brain_once(task, section_for_brain(sec))
@@ -1900,6 +1903,16 @@ def ask_study_question(question):
 
 if st.session_state.study_on:
     render_study()
+
+# Paul asked something on the Study screen with no PDF open: pick his saved PDF
+# back up and answer, or (no PDF at all) just answer him in the chat.
+if (st.session_state.study_on and not st.session_state.study and (prompt or send_voice)
+        and not attached and brain):
+    if st.session_state.study_saved:
+        st.session_state.study = dict(st.session_state.study_saved, qa={})
+        st.session_state.study_autoread = False
+    else:
+        st.session_state.study_on = False
 
 if st.session_state.study_on and (prompt or send_voice or attached):
     has_files = bool(attached)
