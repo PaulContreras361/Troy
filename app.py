@@ -1154,7 +1154,7 @@ with st.sidebar:
                                             type="password", key="type_gemini_key").strip()
             api_key = typed["gemini"]
         if typed:
-            remember = st.checkbox("Remember keys on this device", value=True, key="remember_keys",
+            remember = st.checkbox("Remember keys on this device", value=False, key="remember_keys",
                                    help="Saved in this browser only, so you don't "
                                    "have to paste them again.")
             good = {k: v for k, v in typed.items() if v}
@@ -1271,6 +1271,38 @@ with st.sidebar:
             queue_save()
             start_new_chat()
             st.rerun()
+    # Wipe everything Troy keeps on this phone: chats, study progress, saved
+    # keys and voice settings. (Keys in Streamlit Secrets aren't on the phone.)
+    if not st.session_state.get("confirm_wipe"):
+        if st.button("Clear everything saved on this device", key="wipe_device",
+                     icon=":material/delete_forever:", type="tertiary"):
+            st.session_state.confirm_wipe = True
+            st.rerun()
+    else:
+        st.warning("Erase all chats, study progress, saved keys and voice settings "
+                   "on this device? This can't be undone.")
+        wipe_yes, wipe_no = st.columns(2)
+        if wipe_yes.button("Erase", key="wipe_yes", type="primary", width="stretch"):
+            st.session_state.chats = {}
+            st.session_state.study_saved = None
+            st.session_state.study = None
+            st.session_state.study_on = False
+            queue_save()
+            st.session_state.saved_keys = {}
+            st.session_state.keys_payload = "{}"
+            st.session_state.keys_rev = uuid4().hex
+            for k in ("type_claude_key", "type_gemini_key"):
+                st.session_state.pop(k, None)
+            st.session_state.wipe_voice = True
+            st.session_state.confirm_wipe = False
+            start_new_chat()
+            st.rerun()
+        if wipe_no.button("Cancel", key="wipe_no", width="stretch"):
+            st.session_state.confirm_wipe = False
+            st.rerun()
+    if st.session_state.pop("wipe_voice", False):
+        st.html("<script>try{localStorage.removeItem('troy_voice_cfg')}catch(e){}</script>",
+                unsafe_allow_javascript=True)
     st.markdown(
         '<div class="troy-badge"><span>PC</span>Paul Contreras</div>',
         unsafe_allow_html=True,
