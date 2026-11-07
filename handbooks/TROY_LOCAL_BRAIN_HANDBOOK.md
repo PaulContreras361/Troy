@@ -115,7 +115,7 @@ just plumbing.
 
 ## Step 4 — Already done
 
-`brain.py` is already in `C:\Users\paulc\OneDrive\Desktop\Troy 11-6-2026`, beside `app.py`.
+`brain.py` is already in `C:\Users\paulc\OneDrive\Desktop\Troy's Nov 7, 2026\Troy`, beside `app.py`.
 
 ---
 
@@ -144,7 +144,7 @@ Save and close.
 In a **Command Prompt** window (Windows key, type `cmd`, Enter), move into the Troy folder first:
 
 ```
-cd /d "C:\Users\paulc\OneDrive\Desktop\Troy 11-6-2026"
+cd /d "C:\Users\paulc\OneDrive\Desktop\Troy's Nov 7, 2026\Troy"
 ```
 
 Then run:

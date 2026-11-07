@@ -18,7 +18,7 @@ This is a separate program from your Streamlit Troy. It runs on your **personal 
 
 ## Step 1 — Already done
 
-`troy_hotkey.py` is already in your new Troy folder (`C:\Users\paulc\OneDrive\Desktop\Troy 11-6-2026`), next to `troy_hands.py`.
+`troy_hotkey.py` is already in your new Troy folder (`C:\Users\paulc\OneDrive\Desktop\Troy's Nov 7, 2026\Troy`), next to `troy_hands.py`.
 
 ---
 
@@ -146,7 +146,7 @@ Press **Ctrl + Alt + Shift + Q**.
 3. In that folder, **right-click** an empty spot → **New** → **Shortcut**.
 4. In the box, paste:
    ```
-   pythonw "C:\Users\paulc\OneDrive\Desktop\Troy 11-6-2026\troy_hotkey.py"
+   pythonw "C:\Users\paulc\OneDrive\Desktop\Troy's Nov 7, 2026\Troy\troy_hotkey.py"
    ```
 5. Click **Next**, name it `Troy Hotkey`, click **Finish**.
 

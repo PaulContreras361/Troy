@@ -2,7 +2,7 @@
 
 Everything for your **personal laptop**, in one folder: Troy, his laptop powers (screen, mouse, keyboard, files, AutoCAD, SketchUp, Outlook, EPR checker), Troy Hotkey, Hey Troy, and Glass HUD.
 
-Your old Troy folders are **not touched**. Keep them until this one works, then delete them yourself.
+Your old Troy folders are **not deleted**: they're in `_old copies (delete after new Troy works)`. Once this Troy works, delete that folder yourself.
 
 ---
 
@@ -38,16 +38,18 @@ Your old Troy folders are **not touched**. Keep them until this one works, then 
 2. Click inside it and press **Ctrl + C**. Close the window.
 
 ### Step 2 — Unzip the new folder
+Your old copies are already moved into **Desktop\Troy's Nov 7, 2026\_old copies (delete after new Troy works)**, so nothing gets mixed up.
+
 1. Open your **Downloads** folder (press **Windows key + E**, click **Downloads**).
-2. Right-click **Troy 11-6-2026.zip** and choose **Extract All…**
+2. Right-click **Troy 11-7-2026.zip** and choose **Extract All…**
 3. In the box at the top, delete what's there and type:
    ```
-   C:\Users\paulc\OneDrive\Desktop
+   C:\Users\paulc\OneDrive\Desktop\Troy's Nov 7, 2026
    ```
 4. Click **Extract**.
-5. You now have a folder on your Desktop called **Troy 11-6-2026**. Open it.
-   - **Right:** you see `Install Troy.bat` and `app.py` right away.
-   - **Wrong:** you see one more folder called `Troy 11-6-2026` inside. Then the path in step 3 was not changed. Open that inner folder and use it; everything still works.
+5. Open **Desktop → Troy's Nov 7, 2026 → Troy**.
+   - **Right:** you see `Install Troy.bat` and `app.py`. This **Troy** folder is the one good Troy from now on.
+   - **Wrong:** you see another folder inside. Open it until you see `Install Troy.bat`; use that one.
 
 ### Step 3 — Run the installer
 1. Double-click **Install Troy.bat**.
@@ -161,7 +163,7 @@ This is JARVIS with the name changed: it wakes to **"Hey Troy"**, calls itself T
    - **Wrong:** an error or `v18`. Install **Node LTS** from **nodejs.org**, close Command Prompt, open a new one.
 3. Copy this line, paste it (right-click), press **Enter**:
    ```
-   cd /d "C:\Users\paulc\OneDrive\Desktop\Troy 11-6-2026\jarvis-troy"
+   cd /d "C:\Users\paulc\OneDrive\Desktop\Troy's Nov 7, 2026\Troy\jarvis-troy"
    ```
 4. Type `npm run setup` and press **Enter**. Answer what it asks.
 5. Type `npm install` and press **Enter**. Wait (a few minutes the first time).
