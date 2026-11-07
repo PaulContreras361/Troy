@@ -190,7 +190,7 @@ If it printed a real answer, the local brain works.
 ## Stage 2 — Use it in Troy (already wired)
 
 1. Start Troy with the **Start Troy** icon.
-2. **☰** → **Settings** → **Troy's brain** → pick **Local brain — free, on this laptop (Ollama)**.
+2. **☰** → **Customize** → **Troy's brain** → pick **Local brain — free, on this laptop (Ollama)**.
    - **Right:** under it you see `AI brain: local Ollama (qwen3:8b) — free, offline, no tools`.
    - **Wrong:** `⚠️ Local brain not ready: ...` — do what that line says (usually `ollama serve`).
 3. Chat as normal. Answers take 10–60 seconds on a laptop.

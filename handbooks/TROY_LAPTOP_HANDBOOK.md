@@ -73,9 +73,9 @@ Your old copies are already moved into **Desktop\Troy's Nov 7, 2026\_old copies 
 1. Double-click **Start Troy** on your Desktop (Troy's face icon).
 2. A black window opens (leave it open; closing it stops Troy). Your browser opens Troy at `localhost:8501`.
    - If it opens **old TROY 2.0** instead, the old one is still running. Go back to Part 1 Step 1.
-3. Tap **☰** (top left) → **Settings**.
+3. Tap **☰** (top left) → **Customize**.
 4. If Troy asks for your key, paste your **Claude API key** (starts with `sk-ant-`), keep **Remember keys on this device** ticked, press **Enter**. You only do this once on this laptop.
-5. In Settings, find **Laptop powers**. It starts on **1 · LOOK**.
+5. In Customize, find **Laptop powers**. It starts on **1 · LOOK**.
 
 ---
 
@@ -101,7 +101,7 @@ Your old copies are already moved into **Desktop\Troy's Nov 7, 2026\_old copies 
 
 **After each reply** Troy lists what he used, like `🛠️ autocad_status ✓, autocad_draw ✓`. ✓ = worked, ✗ = failed, (denied) = you said no.
 
-**Brain:** for screen clicking and drawing, pick **Claude Sonnet 5.5** in Settings → Troy's brain. Haiku is cheaper but less reliable at reading the screen.
+**Brain:** for screen clicking and drawing, pick **Claude Sonnet 5.5** in Customize → Troy's brain. Haiku is cheaper but less reliable at reading the screen.
 
 ---
 
@@ -180,7 +180,7 @@ This is JARVIS with the name changed: it wakes to **"Hey Troy"**, calls itself T
 # PART 8½ — Free local brain (optional)
 
 Follow **handbooks\TROY_LOCAL_BRAIN_HANDBOOK.md**: Steps 0–3 install Ollama and the model, Step 6
-tests it. Then in Troy: **Settings → Troy's brain → Local brain**. It chats for free and offline,
+tests it. Then in Troy: **Customize → Troy's brain → Local brain**. It chats for free and offline,
 but can't see photos/PDFs or use the laptop tools. If Claude credits run out, Troy switches to it
 by himself (when Ollama is running).
 
@@ -198,7 +198,7 @@ by himself (when Ollama is running).
 
 | Problem | Fix |
 |---|---|
-| Laptop powers isn't in Settings | You're on the phone/cloud Troy. Use the Desktop **Start Troy** icon on this laptop. |
+| Laptop powers isn't in Customize | You're on the phone/cloud Troy. Use the Desktop **Start Troy** icon on this laptop. |
 | "AutoCAD isn't open" | Say "start AutoCAD", wait 30 seconds, ask again. |
 | AutoCAD step fails with "rejected" | AutoCAD was busy (a dialog box open). Close the dialog, ask again. |
 | "SketchUp didn't answer" | SketchUp must be open with a model, and the plugin loaded (Part 6). |

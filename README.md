@@ -48,7 +48,7 @@ On Windows, run that from your Troy folder in CMD. `python -m` works even when `
 
 ## Other AIs Troy can ask
 
-Claude stays the brain. In Settings → **Other AIs Troy can ask**, paste a
+Claude stays the brain. In Customize → **Other AIs Troy can ask**, paste a
 Perplexity key (`pplx-…`) and/or an OpenAI key (`sk-…`); Gemini uses the voice
 key. Then say "ask Perplexity …", "ask ChatGPT …" or "ask Gemini …". Troy shows
 which AI answered and gives his own right / wrong / unverified check. Perplexity
@@ -60,7 +60,7 @@ go in Streamlit Secrets as `PERPLEXITY_API_KEY` and `OPENAI_API_KEY`.
 The same app gains real tools when it runs on Windows (never on the phone/cloud):
 screen, mouse and keyboard, safe file actions (troy_hands), AutoCAD, SketchUp Pro,
 Outlook (drafts only, never sends) and the read-only EPR checker. A leash in
-Settings (OFF / LOOK / DO / DRIVE) limits what Troy may do, and an Allow / Deny box
+Customize (OFF / LOOK / DO / DRIVE) limits what Troy may do, and an Allow / Deny box
 stops risky steps. Start with `Install Troy.bat`, then `Start Troy.bat`.
 Full baby-step guide: `handbooks/TROY_LAPTOP_HANDBOOK.md`.
 
@@ -105,13 +105,13 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 - **Message box like Claude's:** type in the box at the bottom; tap **＋** to add PDFs, photos (camera or library), .txt/.csv/.md files, or a **.zip** of them (up to 5 files, 10 MB each; a zip is unpacked — up to 10 readable files, 30 MB unpacked — and anything Troy can't read is listed as skipped); tap the **mic** to record a voice note, then **Submit recording**; tap the teal arrow to send.
 - **Troy speaks by himself:** after your first tap on the page, every reply is read aloud automatically — no play button. The **🔊 Troy speaks out loud** switch at the top turns his voice off and on.
 - **📘 Study a PDF:** ☰ → **Study a PDF** (or tap **Study “file” section by section** after sending a PDF). Troy splits it at its numbered sections (2.0 SCOPE, 4.1 …), shows the words big, and reads them word for word with the sentence highlighted — tap any sentence to start there. **Back · Read again · Stop · Next**, reading speed 0.8×–1.5×. Ask only when you want: **Quiz me**, **Explain it**, or **📖 Story / 🎙 Podcast / 🎯 Coach** retellings, or type/say any question about the section. Reading is free (words come straight from the PDF, phone voice); each question is one small brain call. Your place is saved on the phone — **Continue** picks up where you stopped. If a PDF's words come out as gibberish (some company PDFs store letters as font codes) or it's scanned pages, Troy **reads it with Claude's eyes by himself** (no button): each page picture is typed out word for word by Claude Haiku (about 2¢ for 40 pages, one time — the result is saved), then split into sections as usual.
-- **Sidebar like Claude:** tap ☰ for **New chat**, **Search chats**, **Settings** (voice, brain, keys) and **Recents** — every chat is saved on your phone (browser storage), private to that phone, and survives Troy restarting. Tap a chat to reopen it; Troy remembers what was said.
+- **Sidebar like Claude:** tap ☰ for **New chat**, **Search chats**, **Projects** (chat folders with their own instructions), **Artifacts** (web pages, designs and code Troy made, saved by themselves), **Scheduled** (tasks Troy does at a set time, the next time he's open), **Design** (flyers, posters, web pages and app screens as one HTML file), **Study a PDF**, **Customize** (your instructions for Troy, voice, brain, keys) and **Recents**.
 - **Keyboard:** after you send, the phone keyboard closes so you can read the reply.
 - **Human voice:** Troy speaks his replies in a natural Gemini voice (sidebar: **Human voice (Gemini)** and **Troy's voice**). It's free but uses one extra Gemini call per reply on the voice model's own daily allowance. If that runs out or fails, Troy says so and uses your device's best voice instead.
 - **Better device voice on iPhone:** Settings → Accessibility → Spoken Content → Voices → English → download a **Premium** or **Enhanced** voice (e.g. Ava or Evan). Troy picks it automatically.
 - **Brain:** Claude (Haiku 5.5 by default; Sonnet 5.5 in the sidebar). No daily limit — each message is paid from your Claude Console credits (Haiku costs a small fraction of a cent per message). If credits run out, Troy says so. Without a Claude key, Troy falls back to Gemini's free tier (20 messages a day).
 - **Voice:** Gemini (free) makes Troy's human voice and writes down your voice messages for Claude.
-- **Keys:** easiest — paste them once in ☰ → Settings with **Remember keys on this phone** ticked; Troy fills them in every time on that phone (saved in that browser only; **Forget saved keys** removes them). Or put `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` in the app's Streamlit Secrets (works on every device and takes priority).
+- **Keys:** easiest — paste them once in ☰ → Customize with **Remember keys on this phone** ticked; Troy fills them in every time on that phone (saved in that browser only; **Forget saved keys** removes them). Or put `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` in the app's Streamlit Secrets (works on every device and takes priority).
 - The app uses Gemini 2.5 Flash.
 - Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.
 - Voice recording requires microphone permission and browser support; spoken replies use your browser's text-to-speech voices and may be restricted by browser autoplay settings.

@@ -21,6 +21,7 @@ from PIL import Image
 import brain as local_brain     # free Ollama brain on the laptop (brain.py)
 import troy_helpers
 import troy_laptop
+import troy_pages
 import troy_readers
 import troy_study
 
@@ -285,6 +286,7 @@ attached files.
 """
 
 st.set_page_config(page_title="TROY", layout="centered")
+troy_pages.init()
 
 st.markdown(
     """
@@ -318,6 +320,17 @@ st.markdown(
         font-size: 0.85rem;
     }
     /* Recents list: left-aligned rows like Claude's sidebar */
+    .troy-page-title { font-family: Georgia, "Times New Roman", serif; font-size: 2rem;
+        margin: 0.4rem 0 1rem; }
+    .st-key-troy_nav button, [class*="st-key-proj_open_"] button, [class*="st-key-art_open_"] button,
+    [class*="st-key-proj_chat_"] button {
+        justify-content: flex-start; text-align: left; padding-left: 0.6rem; min-height: 2.5rem;
+    }
+    .st-key-troy_nav button > div, .st-key-troy_nav button > div > span,
+    [class*="st-key-art_open_"] button > div, [class*="st-key-proj_open_"] button > div {
+        justify-content: flex-start; width: 100%; min-width: 0;
+    }
+    .st-key-troy_nav button[kind="tertiary"] { border: 1px solid transparent; }
     .st-key-recents button {
         justify-content: flex-start;
         text-align: left;
@@ -564,7 +577,10 @@ def central_now():
 def with_today(instructions):
     """Add today's date so the brain doesn't have to guess it."""
     now = central_now()
-    return (instructions + f"\nToday is {now:%A, %B} {now.day}, {now.year}, "
+    custom = st.session_state.get("custom", "").strip()
+    extra = (f"\n\nPAUL'S OWN INSTRUCTIONS FOR TROY (from Customize):\n{custom}\n" if custom else "")
+    return (instructions + extra + troy_pages.project_instructions()
+            + f"\nToday is {now:%A, %B} {now.day}, {now.year}, "
             f"{now:%I:%M %p} Central time (Point Comfort, Texas).\n")
 
 
@@ -605,7 +621,8 @@ MENU_BUTTON = """
 })();
 </script>
 """
-if not st.session_state.get("messages") and not st.session_state.get("study_on"):
+if (not st.session_state.get("messages") and not st.session_state.get("study_on")
+        and not st.session_state.get("page")):
     st.html(
         MENU_BUTTON
         + f'''<div class="troy-welcome">
@@ -815,7 +832,8 @@ def queue_save():
     newest = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
     st.session_state.chats = {c["id"]: c for c in newest[:MAX_SAVED_CHATS]}
     st.session_state.save_payload = json.dumps(
-        {"v": 2, "chats": st.session_state.chats, "study": st.session_state.study_saved}
+        {"v": 2, "chats": st.session_state.chats, "study": st.session_state.study_saved,
+         **troy_pages.payload()}
     )
     st.session_state.save_rev = uuid4().hex
 
@@ -839,6 +857,9 @@ def save_current():
         "id": cid, "title": old.get("title") or chat_title(msgs),
         "updated": time.time(), "messages": msgs,
     }
+    project = st.session_state.get("project_id") or old.get("project")
+    if project:
+        st.session_state.chats[cid]["project"] = project
     st.session_state.chat_id = cid
     queue_save()
 
@@ -877,6 +898,7 @@ def start_new_chat():
     st.session_state.claude_history = []
     st.session_state.pop("laptop_pending", None)
     st.session_state.chat_id = None
+    st.session_state.project_id = None
     new_gemini_chat()
 
 
@@ -887,6 +909,7 @@ def open_chat(cid):
     st.session_state.claude_history = hist
     st.session_state.pop("laptop_pending", None)
     st.session_state.chat_id = cid
+    st.session_state.project_id = chat.get("project")
     new_gemini_chat(hist)
 
 
@@ -905,6 +928,7 @@ with st.sidebar:
         on_loaded_change=lambda: None,
         height=0,
     )
+    _rev_sent = st.session_state.save_rev     # what the browser was just handed
     if not st.session_state.store_loaded and store.loaded is not None:
         try:
             saved = json.loads(store.loaded) or {}
@@ -924,6 +948,7 @@ with st.sidebar:
             except Exception:
                 saved = {}
         if isinstance(saved, dict) and saved.get("v") == 2:
+            troy_pages.load(saved)
             if saved.get("study") and not st.session_state.study_saved:
                 st.session_state.study_saved = saved["study"]
             saved = saved.get("chats") or {}
@@ -936,18 +961,42 @@ with st.sidebar:
     if st.button("New chat", key="new_chat", icon=":material/add:", width="stretch"):
         start_new_chat()
         st.session_state.study_on = False
-        st.session_state.close_sidebar = True
-        st.rerun()
-    if st.button("Study a PDF", key="open_study", icon=":material/menu_book:", width="stretch"):
-        st.session_state.study_on = True
+        st.session_state.page = None
         st.session_state.close_sidebar = True
         st.rerun()
     query = st.text_input(
         "Search chats", key="chat_search", placeholder="Search chats",
         label_visibility="collapsed", icon=":material/search:",
     ).strip().lower()
+    nav = st.container(key="troy_nav", gap="small")
+    for _page, _label, _icon in (
+        ("projects", "Projects", ":material/folder_open:"),
+        ("artifacts", "Artifacts", ":material/web_stories:"),
+        ("scheduled", "Scheduled", ":material/schedule:"),
+        ("design", "Design", ":material/palette:"),
+    ):
+        if nav.button(_label, key=f"nav_{_page}", icon=_icon, width="stretch",
+                      type="secondary" if st.session_state.page == _page else "tertiary"):
+            troy_pages.open_page(_page)
+            st.session_state.study_on = False
+            st.session_state.close_sidebar = True
+            st.rerun()
+    if nav.button("Study a PDF", key="open_study", icon=":material/menu_book:", width="stretch",
+                  type="secondary" if st.session_state.study_on else "tertiary"):
+        st.session_state.study_on = True
+        st.session_state.page = None
+        st.session_state.close_sidebar = True
+        st.rerun()
 
-    with st.expander("Settings", key="settings_panel", icon=":material/settings:"):
+    with st.expander("Customize", key="settings_panel", icon=":material/tune:"):
+        _custom = st.text_area(
+            "How Troy should work for you", st.session_state.custom, key="custom_box", height=110,
+            placeholder="e.g. Call me Paul. I work in excavation permits and GIS at FPC. "
+            "Keep answers short with steps.",
+            help="Troy follows this in every chat, on this device.")
+        if _custom != st.session_state.custom:
+            st.session_state.custom = _custom
+            queue_save()
         use_human_voice = st.checkbox(
             "Human voice (Gemini)",
             value=True,
@@ -1097,6 +1146,7 @@ with st.sidebar:
             type="secondary" if current else "tertiary", width="stretch",
         ) and not current:
             st.session_state.study_on = False
+            st.session_state.page = None
             open_chat(c["id"])
             st.session_state.close_sidebar = True
             st.rerun()
@@ -1142,7 +1192,7 @@ def make_voice(msg):
 
 
 # ---- Show the conversation so far (Study mode draws its own screen later) ----
-for msg in ([] if st.session_state.study_on else st.session_state.messages):
+for msg in ([] if st.session_state.study_on or st.session_state.page else st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["text"])
         if msg.get("tools"):
@@ -1160,7 +1210,7 @@ for msg in ([] if st.session_state.study_on else st.session_state.messages):
                     st.caption(msg["voice_note"])
                 speak_reply(msg["text"], autoplay=autoplay)
 
-if not st.session_state.study_on and st.session_state.get("last_pdf"):
+if not st.session_state.study_on and not st.session_state.page and st.session_state.get("last_pdf"):
     _pdf_name = st.session_state.last_pdf["name"]
     if st.button(f"Study “{_pdf_name}” section by section", key="study_from_chat",
                  icon=":material/menu_book:"):
@@ -1169,7 +1219,7 @@ if not st.session_state.study_on and st.session_state.get("last_pdf"):
         st.rerun()
 
 _pending = st.session_state.get("laptop_pending")
-if _pending and not st.session_state.study_on:
+if _pending and not st.session_state.study_on and not st.session_state.page:
     with st.container(border=True, key="allow_box"):
         st.markdown("**Troy wants to do this — okay?**")
         if _pending.get("text"):
@@ -1188,7 +1238,9 @@ if _pending and not st.session_state.study_on:
 
 # One message box, like Claude's: ＋ for files, the text, a mic, and send.
 submission = st.chat_input(
-    "Ask Troy about this section…" if st.session_state.study_on else "How can I help you today?",
+    "Ask Troy about this section…" if st.session_state.study_on else (
+        "Describe your design, or a change to it…" if st.session_state.page == "design"
+        else "How can I help you today?"),
     key="composer",
     max_chars=MAX_PROMPT_CHARS,
     accept_file="multiple",
@@ -1552,6 +1604,11 @@ def add_reply(answer, ok):
     used = st.session_state.pop("laptop_used", "")
     if used:
         reply["tools"] = used
+    if ok:
+        saved_n = troy_pages.capture(answer, chat_title(st.session_state.messages))
+        if saved_n:
+            reply["tools"] = (reply.get("tools", "") + " · " if reply.get("tools") else "") + \
+                f"💾 Saved {saved_n} to Artifacts"
     if (ok and auto_speak and use_human_voice and api_key
             and not st.session_state.get("tts_off_today")):
         # Show the text now; the voice is made right after it appears.
@@ -2095,6 +2152,74 @@ def ask_study_question(question):
         add_study_answer("error", question, explain_error(e))
 
 
+# ---- Projects / Artifacts / Scheduled / Design pages ----
+def brain_once(prompt, system=None, model=None, max_tokens=CLAUDE_MAX_REPLY_TOKENS):
+    """One answer, outside any chat (scheduled tasks, designs)."""
+    system = system or with_today(TROY_INSTRUCTIONS)
+    if brain == "claude":
+        r = st.session_state.claude.messages.create(
+            model=model or claude_model, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": prompt}])
+        return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
+    if brain == "local":
+        return local_brain.think(system + "\n\n" + prompt)
+    if brain == "gemini":
+        r = st.session_state.client.models.generate_content(
+            model="gemini-2.5-flash", contents=prompt,
+            config=genai.types.GenerateContentConfig(system_instruction=system))
+        return (r.text or "").strip()
+    raise RuntimeError("Add Troy's Claude key (or a Gemini key) in Customize first.")
+
+
+def ask_design(prompt, system):
+    # Designs get the smarter model when Claude is the brain.
+    return brain_once(prompt, system=system, model="claude-sonnet-5-5", max_tokens=16_000)
+
+
+def task_to_chat(task, answer):
+    cid = uuid4().hex[:12]
+    st.session_state.chats[cid] = {
+        "id": cid, "title": "⏰ " + task["title"][:44], "updated": time.time(),
+        "messages": [{"role": "user", "text": "⏰ Scheduled: " + task["prompt"]},
+                     {"role": "assistant", "text": answer}]}
+    queue_save()
+
+
+if brain and st.session_state.store_loaded and st.session_state.scheduled:
+    _done = troy_pages.run_due(central_now().replace(tzinfo=None), brain_once, task_to_chat,
+                               queue_save)
+    st.session_state.toasts = st.session_state.get("toasts", []) + [
+        f"⏰ Troy did your scheduled task: {_t} — it's in Recents." for _t in _done]
+for _msg in st.session_state.pop("toasts", []):
+    st.toast(_msg)
+
+_page = st.session_state.page
+if _page and not st.session_state.study_on:
+    if _page == "projects":
+        troy_pages.render_projects(st.session_state.chats, open_chat, start_new_chat, queue_save)
+    elif _page == "artifacts":
+        troy_pages.render_artifacts(queue_save)
+    elif _page == "scheduled":
+        troy_pages.render_scheduled(central_now().replace(tzinfo=None), brain_once, task_to_chat,
+                                    queue_save)
+    elif _page == "design":
+        troy_pages.render_design(queue_save, ask_design)
+    if prompt or send_voice or attached:
+        if _page == "design" and prompt and not attached:
+            try:
+                with st.spinner("Troy is designing it (about 30–60 seconds)..."):
+                    troy_pages.design_request(prompt, st.session_state.get("design_kind")
+                                              or list(troy_pages.DESIGN_KINDS)[0], ask_design)
+                queue_save()
+                st.session_state.hide_keyboard = True
+                st.rerun()
+            except Exception as e:
+                st.error(explain_error(e))
+            prompt = ""
+            send_voice = ask_about_files = False
+        else:
+            st.session_state.page = None     # typing anywhere else goes back to the chat
+
 if st.session_state.study_on:
     render_study()
 
@@ -2190,3 +2315,8 @@ def resume_laptop(allow):
 if "allow_choice" in st.session_state and st.session_state.get("laptop_pending"):
     resume_laptop(st.session_state.pop("allow_choice"))
 st.session_state.pop("allow_choice", None)
+
+# Something was saved after the browser storage was handed its copy this run
+# (a scheduled task, Customize text...): draw once more so it really gets saved.
+if st.session_state.save_rev != _rev_sent:
+    st.rerun()
