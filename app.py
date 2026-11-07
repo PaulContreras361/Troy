@@ -116,7 +116,9 @@ def human_voice(client, text, voice_name):
 def _tts_once(client, model, spoken, voice_name):
     response = client.models.generate_content(
         model=model,
-        contents="Read this aloud in a warm, natural, conversational voice:\n" + spoken,
+        # Only Troy's words: newer voice models read any instruction out loud.
+        # The voice picked in Settings is set below, not described in words.
+        contents=spoken,
         config=genai.types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=genai.types.SpeechConfig(
