@@ -287,6 +287,9 @@ VOICE_PANEL = """
     <button type="button" class="tvp-play" title="Test the voice">▶</button></div>
   <label class="tvp-card">Phone voice
     <select class="tvp-voice"><option value="">Automatic (most natural)</option></select></label>
+  <div class="tvp-fav"><button type="button" data-fav="Ava">Ava</button>
+    <button type="button" data-fav="Nathan">Nathan</button></div>
+  <div class="tvp-favnote"></div>
   <div class="tvp-lab">Rate</div>
   <div class="tvp-card tvp-row"><span>Slow</span>
     <input type="range" data-k="rate" min="0.5" max="2" step="0.05"><span>Fast</span></div>
@@ -321,6 +324,11 @@ VOICE_PANEL = """
   .tvp-card select { width:100%; margin-top:0.35rem; padding:0.45rem; border-radius:0.6rem;
     background:rgba(128,128,128,.18); color:inherit; border:1px solid rgba(128,128,128,.35);
     font-size:16px; }
+  .tvp-fav { display:flex; gap:0.5rem; margin:-0.1rem 0 0.4rem; }
+  .tvp-fav button { flex:1; padding:0.45rem; border-radius:999px; color:inherit;
+    background:rgba(128,128,128,.12); border:1px solid rgba(128,128,128,.4); }
+  .tvp-fav button.on { border-color:#0ea5a4; background:rgba(14,165,164,.2); }
+  .tvp-favnote { opacity:0.65; font-size:0.8rem; margin-bottom:0.4rem; }
   .tvp-lab { opacity:0.6; font-weight:600; margin:0.4rem 0 0.25rem; }
   .tvp-row { display:flex; align-items:center; gap:0.5rem; }
   .tvp-row span { opacity:0.7; font-size:0.85rem; min-width:2rem; text-align:center; }
@@ -351,6 +359,8 @@ VOICE_PANEL = """
     box.querySelectorAll("input[type=range]").forEach(r => r.value = c[r.dataset.k]);
     box.querySelectorAll("[data-show]").forEach(b => b.textContent = fmt[b.dataset.show](c[b.dataset.show]));
     sel.value = c.voice;
+    box.querySelectorAll("[data-fav]").forEach(b =>
+      b.classList.toggle("on", c.voice.toLowerCase().startsWith(b.dataset.fav.toLowerCase())));
   }
   function set(k, v) { const c = A.cfg(); c[k] = v; A.saveCfg(c); draw(); }
   function fillVoices() {
@@ -367,6 +377,25 @@ VOICE_PANEL = """
   if (window.speechSynthesis) speechSynthesis.addEventListener("voiceschanged", fillVoices);
   setTimeout(fillVoices, 800);
   sel.addEventListener("change", () => set("voice", sel.value));
+  // Quick picks: the best-quality copy of that voice on this phone
+  // (Premium, then Enhanced, then the basic one).
+  const note = box.querySelector(".tvp-favnote");
+  box.querySelectorAll("[data-fav]").forEach(b => b.addEventListener("click", () => {
+    const name = b.dataset.fav;
+    const vs = (window.speechSynthesis ? speechSynthesis.getVoices() : [])
+      .filter(v => v.name.toLowerCase().startsWith(name.toLowerCase()) && /^en/i.test(v.lang));
+    const q = v => (/premium/i.test(v.name) ? 2 : /enhanced/i.test(v.name) ? 1 : 0);
+    vs.sort((a, b) => q(b) - q(a));
+    if (!vs.length) {
+      note.textContent = name + " isn't on this phone yet. Download it: iPhone Settings > " +
+        "Accessibility > Spoken Content > Voices > English > " + name + ".";
+      return;
+    }
+    note.textContent = "Using " + vs[0].name + ".";
+    set("voice", vs[0].name);
+    A.stop();
+    A.sayAll(["Hi Paul, this is Troy."].map(t => A.tune(new SpeechSynthesisUtterance(t))));
+  }));
   box.querySelectorAll("input[type=range]").forEach(r =>
     r.addEventListener("input", () => set(r.dataset.k, parseFloat(r.value))));
   box.querySelectorAll(".tvp-pm button").forEach(b => b.addEventListener("click", () => {
