@@ -322,6 +322,13 @@ st.markdown(
         text-overflow: ellipsis;
         text-align: left;
     }
+    /* Select mode: keep long chat titles on one line */
+    .st-key-select_list label p {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .st-key-select_toggle { display: flex; justify-content: flex-end; }
     .st-key-recents button[kind="tertiary"] {
         border: 1px solid transparent;
     }
@@ -883,7 +890,6 @@ with st.sidebar:
         st.caption("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
         st.caption("Chats are saved on this device only.")
 
-    st.markdown('<div class="troy-side-label">Recents</div>', unsafe_allow_html=True)
     recents = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
     if query:
         recents = [
@@ -891,8 +897,61 @@ with st.sidebar:
             if query in c["title"].lower()
             or any(query in m["text"].lower() for m in c["messages"])
         ]
+    selecting = st.session_state.get("select_mode", False)
+    label_col, select_col = st.columns([3, 2], vertical_alignment="center")
+    label_col.markdown('<div class="troy-side-label">Recents</div>', unsafe_allow_html=True)
+    if recents and select_col.button(
+        "Done" if selecting else "Select", key="select_toggle", type="tertiary",
+        icon=":material/close:" if selecting else ":material/checklist:",
+    ):
+        st.session_state.select_mode = not selecting
+        st.session_state.confirm_delete = False
+        for k in [k for k in st.session_state if str(k).startswith("sel_")]:
+            del st.session_state[k]
+        st.rerun()
     if not recents:
         st.caption("No chats yet." if not query else "No chats match.")
+        selecting = False
+
+    if selecting:
+        # Select mode: a checkbox for each chat, Select all, then Delete with a confirm step.
+        shown_ids = [c["id"] for c in recents]
+
+        def _select_all():
+            on = st.session_state.sel_all
+            for i in shown_ids:
+                st.session_state[f"sel_{i}"] = on
+
+        st.checkbox("Select all", key="sel_all", on_change=_select_all)
+        select_box = st.container(key="select_list", gap="small")
+        for c in recents:
+            select_box.checkbox(c["title"], key=f"sel_{c['id']}")
+        picked = [i for i in shown_ids if st.session_state.get(f"sel_{i}")]
+        if not st.session_state.get("confirm_delete"):
+            if st.button(f"Delete selected ({len(picked)})", key="delete_selected",
+                         icon=":material/delete:", disabled=not picked, width="stretch"):
+                st.session_state.confirm_delete = True
+                st.rerun()
+        else:
+            n = len(picked)
+            st.warning(f"Delete {n} chat{'s' if n != 1 else ''}? This can't be undone.")
+            yes_col, no_col = st.columns(2)
+            if yes_col.button("Delete", key="confirm_yes", type="primary", width="stretch"):
+                for i in picked:
+                    st.session_state.chats.pop(i, None)
+                if st.session_state.chat_id in picked:
+                    start_new_chat()
+                queue_save()
+                st.session_state.select_mode = False
+                st.session_state.confirm_delete = False
+                for k in [k for k in st.session_state if str(k).startswith("sel_")]:
+                    del st.session_state[k]
+                st.rerun()
+            if no_col.button("Cancel", key="confirm_no", width="stretch"):
+                st.session_state.confirm_delete = False
+                st.rerun()
+        recents = []  # list is shown as checkboxes above, not as buttons
+
     recents_box = st.container(key="recents", gap="small")
     for c in recents:
         current = c["id"] == st.session_state.chat_id
@@ -904,7 +963,7 @@ with st.sidebar:
             open_chat(c["id"])
             st.session_state.close_sidebar = True
             st.rerun()
-    if st.session_state.chat_id:
+    if st.session_state.chat_id and not selecting:
         if st.button("Delete this chat", key="delete_chat", icon=":material/delete:",
                      type="tertiary"):
             st.session_state.chats.pop(st.session_state.chat_id, None)
