@@ -1974,9 +1974,9 @@ def render_study():
             elif brain == "gemini":
                 st.warning(f"This PDF needs to be read page by page because {why}, and "
                            f"{n} pages is more than Troy's free Gemini brain allows in a day. "
-                           "Add your Claude key in Settings and add the PDF again.")
+                           "Add your Claude key in Customize and add the PDF again.")
             else:
-                st.warning("Add Troy's Claude key in Settings, then add the PDF again.")
+                st.warning("Add Troy's Claude key in Customize, then add the PDF again.")
             if st.button("Cancel", key="ocr_cancel", type="tertiary"):
                 st.session_state.study_ocr = None
                 st.rerun()

@@ -8,7 +8,7 @@ Plain English:
     ask_gemini      - a second opinion from Google's Gemini (uses the voice key)
   Paul can also just say "ask ChatGPT ..." or "check this with Perplexity".
 
-  Each helper only shows up when its key is in Settings. Perplexity and the
+  Each helper only shows up when its key is in Customize. Perplexity and the
   OpenAI API bill per question on their own accounts (a ChatGPT Plus
   subscription does NOT include API use). Gemini's free tier has a daily limit.
 
@@ -45,7 +45,7 @@ def _http_error(name, e):
             detail = detail.get("message") or json.dumps(detail)[:300]
     except Exception:            # noqa: BLE001
         detail = ""
-    hint = {401: "the key was refused - check it in Settings",
+    hint = {401: "the key was refused - check it in Customize",
             402: "the account is out of credit",
             429: "too many questions or out of credit - try later"}.get(e.code, "")
     return {"ok": False, "error": f"{name} said {e.code}: {hint or detail}"[:400]}

@@ -11,7 +11,7 @@ Plain English:
       1 LOOK   read files, screenshots, see AutoCAD/SketchUp/email
       2 DO     open apps and files, draw, write drafts, file moves (with Allow)
       3 DRIVE  mouse, keyboard, AutoCAD command line
-  Paul picks the level in Settings. Troy can't raise it himself.
+  Paul picks the level in Customize. Troy can't raise it himself.
   A second setting, "run without asking up to", decides which steps stop for
   an Allow / Deny box. File changes, saves and raw commands ALWAYS ask.
 
