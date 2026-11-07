@@ -158,6 +158,23 @@ SPEAKER_JS = """
   window.addEventListener("resize", fitBox);
   if (window.visualViewport) window.visualViewport.addEventListener("resize", fitBox);
   setInterval(fitBox, 1000);
+  // Slide the voice switch into the message box, just right of the + button.
+  function dockVoice() {
+    const dock = document.querySelector(".st-key-voice_dock");
+    const plus = document.querySelector('[data-testid="stChatInputFileUploadButton"]');
+    if (!dock || !plus) return;
+    const box = dock.offsetParent || dock.parentElement;
+    const p = plus.getBoundingClientRect(), b = box.getBoundingClientRect();
+    const d = dock.getBoundingClientRect();
+    if (!p.width) return;
+    dock.style.left = Math.round(p.right - b.left + 10) + "px";
+    dock.style.top = Math.round(p.top - b.top + (p.height - d.height) / 2) + "px";
+    dock.style.bottom = "auto";
+    dock.style.opacity = "1";
+  }
+  setInterval(dockVoice, 250);
+  window.addEventListener("resize", dockVoice);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", dockVoice);
   A.stop = () => {
     try { A.el.pause(); } catch (e) {}
     if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -423,6 +440,19 @@ st.markdown(
         width: 2.4rem !important;
         height: 2.4rem !important;
     }
+    /* Voice switch docked in the message box, right of the ＋ button */
+    [data-testid="stBottomBlockContainer"] { position: relative; }
+    .st-key-voice_dock {
+        position: absolute !important;
+        z-index: 5;
+        width: auto !important;
+        left: 4.6rem;
+        bottom: 1.4rem;
+        opacity: 0;  /* the page helper shows it once it's lined up */
+    }
+    .st-key-voice_dock [data-testid="stTooltipIcon"] { display: none; }
+    .st-key-voice_dock label { gap: 0.3rem; margin: 0; }
+    .st-key-voice_dock label p { font-size: 1.15rem; }
     [data-testid="stChatInputSubmitButton"]:disabled {
         opacity: 0.45;
     }
@@ -598,9 +628,12 @@ except Exception:
     api_key = os.environ.get("GEMINI_API_KEY", "")
 
 st.html(SPEAKER_JS, unsafe_allow_javascript=True)
-auto_speak = st.toggle(
-    "🔊 Troy speaks out loud", value=True, key="voice_on",
-    help="On: Troy reads every reply aloud by himself. Off: he stays quiet.",
+# The voice switch sits inside the message box, between ＋ and the mic.
+# It lives in Streamlit's bottom area (same place as the message box) and the
+# CSS ".st-key-voice_dock" rule slides it into the box's button row.
+auto_speak = st.bottom.container(key="voice_dock").toggle(
+    "🔊", value=True, key="voice_on",
+    help="Troy speaks out loud. On: Troy reads every reply aloud by himself. Off: he stays quiet.",
 )
 # One page helper, drawn on EVERY run so the layout never shifts. (If it only
 # appeared sometimes, Streamlit would think the attach panel was new and close it.)
