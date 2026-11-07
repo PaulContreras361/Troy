@@ -7,6 +7,7 @@ import time
 import io
 import os
 import re
+from pathlib import Path
 import wave
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -19,6 +20,7 @@ from PIL import Image
 
 import brain as local_brain     # free Ollama brain on the laptop (brain.py)
 import troy_laptop
+import troy_readers
 import troy_study
 
 LAPTOP = troy_laptop.available()   # Windows laptop only, never the phone/cloud
@@ -50,6 +52,12 @@ FILE_TYPES = {
     "md": "text/plain",
     "csv": "text/csv",
     "zip": "application/zip",   # unpacked; the readable files inside are used
+    # Turned into text before Troy reads them (troy_readers.py):
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+    "xls": "application/vnd.ms-excel",
+    "dxf": "image/vnd.dxf",
+    "dwg": "image/vnd.dwg",
 }
 
 
@@ -413,6 +421,10 @@ st.markdown(
         padding: 0.4rem 0.2rem 0.4rem 0.1rem !important;
     }
     [data-testid="InputInstructions"] { display: none !important; }
+    /* No "Upload or drag and drop files…" note popping up over the + (or the mic) */
+    body:has([data-testid="stChatInputFileUploadButton"]:hover) [data-baseweb="tooltip"],
+    body:has([data-testid="stChatInputFileUploadButton"]:focus-within) [data-baseweb="tooltip"],
+    body:has([data-testid="stChatInputMicButton"]:hover) [data-baseweb="tooltip"] { display: none !important; }
     /* small + and mic under the box, no circles */
     [data-testid="stChatInput"] > div > div > div:has([data-testid="stChatInputFileUploadButton"]) {
         position: absolute !important; left: 0.35rem; bottom: 0; z-index: 2;
@@ -1211,6 +1223,23 @@ def unzip(name, data):
     return found, skipped, None
 
 
+def keep_on_laptop(item):
+    """On the laptop, save a .dwg copy where AutoCAD (and Troy's fence) can reach it."""
+    if not LAPTOP:
+        return None
+    try:
+        folder = Path.home() / "Documents" / "Troy uploads"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / item["name"]
+        if path.exists() and path.read_bytes() != item["data"]:
+            path = folder / f"{path.stem} ({time.strftime('%Y-%m-%d %H%M%S')}){path.suffix}"
+        if not path.exists():
+            path.write_bytes(item["data"])
+        return str(path)
+    except OSError:
+        return None
+
+
 def file_parts(files):
     """Read uploaded files into a simple list. Returns (files, problem)."""
     if len(files) > MAX_FILES:
@@ -1223,19 +1252,25 @@ def file_parts(files):
         ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
         mime = FILE_TYPES.get(ext)
         if mime is None:
-            return None, f"Troy can't read {f.name}. Use a PDF, photo, text file, or zip."
+            return None, (f"Troy can't read {f.name}. Use a PDF, photo, Excel, DXF/DWG, "
+                          "text file, or zip.")
         if ext == "zip":
             inside, skipped, problem = unzip(f.name, data)
             if problem:
                 return None, problem
             if not inside:
                 return None, (f"Nothing in {f.name} that Troy can read — he takes PDFs, "
-                              "photos, and .txt/.csv/.md files.")
+                              "photos, Excel, DXF/DWG and .txt/.csv/.md files.")
             st.session_state.zip_note = (f.name, [x["name"] for x in inside], skipped)
             items = inside
         else:
             items = [{"name": f.name, "mime": mime, "data": data}]
         for item in items:
+            ext_i = item["name"].rsplit(".", 1)[-1].lower() if "." in item["name"] else ""
+            if ext_i in troy_readers.CONVERTED:
+                saved = keep_on_laptop(item) if ext_i == "dwg" else None
+                item["data"] = troy_readers.to_text(item["name"], item["data"], saved).encode("utf-8")
+                item["mime"] = "text/plain"
             try:
                 item["data"], item["mime"] = shrink_photo(item["data"], item["mime"])
             except Exception:

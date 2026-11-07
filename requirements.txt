@@ -5,3 +5,5 @@ pillow>=10.0
 pypdf>=4.0
 pypdfium2>=4.0
 tzdata>=2024.1
+openpyxl>=3.1
+ezdxf>=1.3
