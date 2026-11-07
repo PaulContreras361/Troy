@@ -58,7 +58,14 @@ def speech_text(text):
 
 
 # Gemini's free text-to-speech model and a few of its voices.
-TTS_MODEL = "gemini-3.1-flash-tts-preview"
+# Google retires preview voice models, so try the newest first and fall back.
+# The first one that works is remembered for the rest of the visit.
+TTS_MODELS = [
+    "gemini-3.8-flash-lite-tts",
+    "gemini-3.8-flash-tts",
+    "gemini-3.1-flash-tts-preview",
+    "gemini-2.5-flash-preview-tts",
+]
 TTS_VOICES = {
     "Charon — calm, informative": "Charon",
     "Puck — upbeat": "Puck",
@@ -86,8 +93,29 @@ def human_voice(client, text, voice_name):
     spoken = speech_text(text)
     if len(spoken) > MAX_TTS_CHARS:
         spoken = spoken[:MAX_TTS_CHARS].rsplit(" ", 1)[0] + " ... The rest is on screen."
+    models = TTS_MODELS
+    good = st.session_state.get("tts_model")
+    if good:
+        models = [good] + [m for m in TTS_MODELS if m != good]
+    last_error = None
+    for model in models:
+        try:
+            wav = _tts_once(client, model, spoken, voice_name)
+            st.session_state.tts_model = model
+            return wav
+        except Exception as e:
+            code = getattr(e, "code", None)
+            # 404/410 = that model is gone; 400 can mean "this model can't do that".
+            # Anything else (429 used up, bad key 401/403, server 5xx) stops here.
+            if code not in (400, 404, 410):
+                raise
+            last_error = e
+    raise last_error
+
+
+def _tts_once(client, model, spoken, voice_name):
     response = client.models.generate_content(
-        model=TTS_MODEL,
+        model=model,
         contents="Read this aloud in a warm, natural, conversational voice:\n" + spoken,
         config=genai.types.GenerateContentConfig(
             response_modalities=["AUDIO"],
@@ -120,7 +148,15 @@ SPEAKER_JS = """
 (() => {
   if (window.troyAudio) return;
   // Play even when the iPhone ringer switch is on silent (Safari 17+).
-  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+  // But "playback" also blocks the microphone, so switch to "play-and-record"
+  // the moment the mic button is touched, and back to "playback" for replies.
+  const session = (t) => { try { if (navigator.audioSession) navigator.audioSession.type = t; } catch (e) {} };
+  session("playback");
+  ["pointerdown", "touchstart", "mousedown"].forEach(ev => document.addEventListener(ev, (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('[data-testid="stChatInputMicButton"]')) session("play-and-record");
+  }, { capture: true }));
+  window.troySession = session;
   const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
   const A = window.troyAudio = { el: new Audio(), unlocked: false, url: null };
   A.el.setAttribute("playsinline", "");
@@ -210,6 +246,7 @@ SPEAKER_JS = """
   A.gen = 0;
   A.sayAll = (utterances) => {
     if (!window.speechSynthesis) return;
+    if (window.troySession) window.troySession("playback");
     const pause = A.cfg().pause * 1000, gen = A.gen;
     if (!pause) { utterances.forEach(u => speechSynthesis.speak(u)); return; }
     let i = 0;
@@ -259,6 +296,7 @@ SPEAKER_JS = """
   };
   A.play = (b64) => {
     A.stop();
+    if (window.troySession) window.troySession("playback");
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
     if (A.url) URL.revokeObjectURL(A.url);
     A.url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
@@ -1260,8 +1298,12 @@ def make_voice(msg):
             st.session_state.tts_off_today = True
             msg["voice_note"] = "Human voice used up for today — using your device's voice."
         else:
+            code = getattr(e, "code", None)
+            why = str(getattr(e, "message", "") or "").strip().split("\n")[0][:120]
             msg["voice_note"] = (
-                f"Human voice unavailable ({type(e).__name__}) — using your device's voice."
+                f"Human voice unavailable ({type(e).__name__}"
+                + (f" {code}" if code else "") + (f": {why}" if why else "")
+                + ") — using your device's voice."
             )
 
 
