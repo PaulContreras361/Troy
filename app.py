@@ -175,8 +175,86 @@ SPEAKER_JS = """
   setInterval(dockVoice, 250);
   window.addEventListener("resize", dockVoice);
   if (window.visualViewport) window.visualViewport.addEventListener("resize", dockVoice);
+  // ---- Voice settings (the Settings > Voice panel). Saved on this phone. ----
+  const DEFAULTS = { voice: "", rate: 1, pitch: 1, volume: 1, pause: 0, bass: 0, treble: 0 };
+  A.cfg = () => {
+    let c = {};
+    try { c = JSON.parse(localStorage.getItem("troy_voice_cfg") || "{}"); } catch (e) {}
+    return Object.assign({}, DEFAULTS, c);
+  };
+  A.saveCfg = (c) => { try { localStorage.setItem("troy_voice_cfg", JSON.stringify(c)); } catch (e) {} };
+  A.DEFAULTS = DEFAULTS;
+  // The phone voice to use: the one picked in Settings, else the most natural one.
+  A.deviceVoice = () => {
+    if (!window.speechSynthesis) return null;
+    const all = speechSynthesis.getVoices();
+    const want = A.cfg().voice;
+    if (want) { const v = all.find(v => v.name === want); if (v) return v; }
+    const voices = all.filter(v => /^en/i.test(v.lang));
+    const rank = v => (/premium/i.test(v.name) ? 60 : 0) + (/natural|neural|online/i.test(v.name) ? 50 : 0)
+      + (/enhanced/i.test(v.name) ? 40 : 0) + (/google/i.test(v.name) ? 30 : 0)
+      + (/^(ava|evan|zoe|nathan|samantha|alex|aria|guy|jenny)\b/i.test(v.name) ? 10 : 0)
+      + (/en[-_]US/i.test(v.lang) ? 5 : 0) + (v.localService ? 0 : 1);
+    voices.sort((a, b) => rank(b) - rank(a));
+    return voices[0] || null;
+  };
+  // Apply voice, rate, pitch and volume to one phone-voice sentence.
+  A.tune = (u, extraRate) => {
+    const c = A.cfg(), v = A.deviceVoice();
+    if (v) { try { u.voice = v; u.lang = v.lang; } catch (e) {} }
+    u.rate = Math.min(4, Math.max(0.25, c.rate * (extraRate || 1)));
+    u.pitch = c.pitch; u.volume = c.volume;
+    return u;
+  };
+  // Speak a list of sentences with the Sentence Pause between them.
+  A.gen = 0;
+  A.sayAll = (utterances) => {
+    if (!window.speechSynthesis) return;
+    const pause = A.cfg().pause * 1000, gen = A.gen;
+    if (!pause) { utterances.forEach(u => speechSynthesis.speak(u)); return; }
+    let i = 0;
+    const next = () => {
+      if (gen !== A.gen || i >= utterances.length) return;
+      const u = utterances[i++], done = u.onend;
+      u.onend = (e) => { if (done) done(e); setTimeout(next, pause); };
+      speechSynthesis.speak(u);
+    };
+    next();
+  };
+  // Gemini's human voice: speed by playbackRate; volume + equalizer through
+  // Web Audio (iPhone ignores a plain player's volume). The tuned player is a
+  // second player, used only when volume or the equalizer is changed, so the
+  // normal player keeps working if the iPhone pauses Web Audio.
+  A.eq = null;
+  function eqPlayer() {
+    if (A.eq) return A.eq;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try {
+      const ctx = new AC(), el = new Audio();
+      el.setAttribute("playsinline", "");
+      const src = ctx.createMediaElementSource(el);
+      const bass = ctx.createBiquadFilter(); bass.type = "lowshelf"; bass.frequency.value = 250;
+      const treble = ctx.createBiquadFilter(); treble.type = "highshelf"; treble.frequency.value = 4000;
+      const gain = ctx.createGain();
+      src.connect(bass); bass.connect(treble); treble.connect(gain); gain.connect(ctx.destination);
+      A.eq = { ctx, el, bass, treble, gain };
+    } catch (e) { A.eq = null; }
+    return A.eq;
+  }
+  A.eqWake = () => {
+    const c = A.cfg();
+    if (c.volume >= 1 && !c.bass && !c.treble) return;
+    const q = eqPlayer();
+    if (!q) return;
+    try { q.ctx.resume(); } catch (e) {}
+    try { q.el.src = SILENT; q.el.play().catch(() => {}); } catch (e) {}
+  };
+  ["touchend", "click"].forEach(e => document.addEventListener(e, A.eqWake, { capture: true }));
   A.stop = () => {
+    A.gen++;
     try { A.el.pause(); } catch (e) {}
+    try { if (A.eq) A.eq.el.pause(); } catch (e) {}
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   };
   A.play = (b64) => {
@@ -184,9 +262,124 @@ SPEAKER_JS = """
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
     if (A.url) URL.revokeObjectURL(A.url);
     A.url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-    A.el.src = A.url;
-    return A.el.play();
+    const c = A.cfg();
+    let el = A.el;
+    const q = (c.volume < 1 || c.bass || c.treble) ? eqPlayer() : null;
+    if (q && q.ctx.state === "running") {
+      q.bass.gain.value = c.bass; q.treble.gain.value = c.treble; q.gain.gain.value = c.volume;
+      el = q.el;
+    }
+    el.src = A.url;
+    el.preservesPitch = true; el.webkitPreservesPitch = true;
+    el.playbackRate = c.rate;
+    return el.play();
   };
+})();
+</script>
+"""
+
+
+# Settings > Voice: works like the iPhone's Spoken Content screen. It all runs
+# on the phone and is saved there (window.troyAudio.cfg in SPEAKER_JS).
+VOICE_PANEL = """
+<div id="troy-voice-panel" class="tvp">
+  <div class="tvp-head"><span>Voice</span>
+    <button type="button" class="tvp-play" title="Test the voice">▶</button></div>
+  <label class="tvp-card">Phone voice
+    <select class="tvp-voice"><option value="">Automatic (most natural)</option></select></label>
+  <div class="tvp-lab">Rate</div>
+  <div class="tvp-card tvp-row"><span>Slow</span>
+    <input type="range" data-k="rate" min="0.5" max="2" step="0.05"><span>Fast</span></div>
+  <div class="tvp-lab">Pitch</div>
+  <div class="tvp-card tvp-row"><span>Low</span>
+    <input type="range" data-k="pitch" min="0.5" max="2" step="0.05"><span>High</span></div>
+  <div class="tvp-lab">Speech Volume</div>
+  <div class="tvp-card tvp-row"><span>🔈</span>
+    <input type="range" data-k="volume" min="0.1" max="1" step="0.05"><span>🔊</span></div>
+  <div class="tvp-card tvp-step"><div>Sentence Pause<br><b data-show="pause"></b></div>
+    <div class="tvp-pm"><button type="button" data-k="pause" data-d="-0.25">−</button>
+    <button type="button" data-k="pause" data-d="0.25">+</button></div></div>
+  <div class="tvp-lab">Equalizer</div>
+  <div class="tvp-card tvp-step"><div>Bass<br><b data-show="bass"></b></div>
+    <div class="tvp-pm"><button type="button" data-k="bass" data-d="-2">−</button>
+    <button type="button" data-k="bass" data-d="2">+</button></div></div>
+  <div class="tvp-card tvp-step"><div>Treble<br><b data-show="treble"></b></div>
+    <div class="tvp-pm"><button type="button" data-k="treble" data-d="-2">−</button>
+    <button type="button" data-k="treble" data-d="2">+</button></div></div>
+  <button type="button" class="tvp-reset">Reset to normal</button>
+  <div class="tvp-note">Phone voice, Pitch and Sentence Pause change your phone's voice.
+    Rate, Volume and Equalizer change the human (Gemini) voice too.</div>
+</div>
+<style>
+  .tvp { font-size: 0.95rem; }
+  .tvp-head { display:flex; justify-content:space-between; align-items:center;
+    font-weight:700; font-size:1.05rem; margin:0.2rem 0 0.5rem; }
+  .tvp-play { width:2.4rem; height:2.4rem; border-radius:50%; border:1px solid rgba(128,128,128,.45);
+    background:rgba(128,128,128,.12); color:inherit; font-size:1rem; }
+  .tvp-card { display:block; background:rgba(128,128,128,.12); border-radius:1rem;
+    padding:0.6rem 0.8rem; margin-bottom:0.5rem; }
+  .tvp-card select { width:100%; margin-top:0.35rem; padding:0.45rem; border-radius:0.6rem;
+    background:rgba(128,128,128,.18); color:inherit; border:1px solid rgba(128,128,128,.35);
+    font-size:16px; }
+  .tvp-lab { opacity:0.6; font-weight:600; margin:0.4rem 0 0.25rem; }
+  .tvp-row { display:flex; align-items:center; gap:0.5rem; }
+  .tvp-row span { opacity:0.7; font-size:0.85rem; min-width:2rem; text-align:center; }
+  .tvp-row input { flex:1; accent-color:#0ea5a4; }
+  .tvp-step { display:flex; justify-content:space-between; align-items:center; }
+  .tvp-step b { font-weight:400; opacity:0.65; }
+  .tvp-pm { display:flex; background:rgba(128,128,128,.18); border-radius:999px; overflow:hidden; }
+  .tvp-pm button { width:2.8rem; height:2.3rem; background:none; border:none; color:inherit;
+    font-size:1.3rem; }
+  .tvp-pm button + button { border-left:1px solid rgba(128,128,128,.4); }
+  .tvp-reset { width:100%; padding:0.5rem; border-radius:0.8rem; background:none; color:inherit;
+    border:1px solid rgba(128,128,128,.45); margin-top:0.2rem; }
+  .tvp-note { opacity:0.55; font-size:0.8rem; margin-top:0.5rem; }
+</style>
+<script>
+(function setup() {
+  const box = document.getElementById("troy-voice-panel");
+  const A = window.troyAudio;
+  if (!box || box.dataset.ready) return;
+  if (!A || !A.cfg) { setTimeout(setup, 200); return; }  // wait for Troy's voice engine
+  box.dataset.ready = "1";
+  const LIMITS = { pause: [0, 3], bass: [-12, 12], treble: [-12, 12] };
+  const fmt = { pause: v => v ? v + " sec" : "None",
+                bass: v => (v > 0 ? "+" : "") + v + " dB", treble: v => (v > 0 ? "+" : "") + v + " dB" };
+  const sel = box.querySelector(".tvp-voice");
+  function draw() {
+    const c = A.cfg();
+    box.querySelectorAll("input[type=range]").forEach(r => r.value = c[r.dataset.k]);
+    box.querySelectorAll("[data-show]").forEach(b => b.textContent = fmt[b.dataset.show](c[b.dataset.show]));
+    sel.value = c.voice;
+  }
+  function set(k, v) { const c = A.cfg(); c[k] = v; A.saveCfg(c); draw(); }
+  function fillVoices() {
+    if (!window.speechSynthesis) return;
+    const vs = speechSynthesis.getVoices().slice().sort((a, b) =>
+      (/^en/i.test(b.lang) - /^en/i.test(a.lang)) || a.name.localeCompare(b.name));
+    if (!vs.length) return;
+    sel.length = 1;
+    vs.forEach(v => { const o = document.createElement("option");
+      o.value = v.name; o.textContent = v.name + " (" + v.lang + ")"; sel.appendChild(o); });
+    draw();
+  }
+  fillVoices();
+  if (window.speechSynthesis) speechSynthesis.addEventListener("voiceschanged", fillVoices);
+  setTimeout(fillVoices, 800);
+  sel.addEventListener("change", () => set("voice", sel.value));
+  box.querySelectorAll("input[type=range]").forEach(r =>
+    r.addEventListener("input", () => set(r.dataset.k, parseFloat(r.value))));
+  box.querySelectorAll(".tvp-pm button").forEach(b => b.addEventListener("click", () => {
+    const k = b.dataset.k, [lo, hi] = LIMITS[k];
+    set(k, Math.min(hi, Math.max(lo, Math.round((A.cfg()[k] + parseFloat(b.dataset.d)) * 100) / 100)));
+  }));
+  box.querySelector(".tvp-reset").addEventListener("click", () => { A.saveCfg(Object.assign({}, A.DEFAULTS)); draw(); });
+  box.querySelector(".tvp-play").addEventListener("click", () => {
+    A.stop();
+    const lines = ["Hi Paul, this is Troy.", "This is how I will sound."];
+    A.sayAll(lines.map(t => A.tune(new SpeechSynthesisUtterance(t))));
+  });
+  draw();
 })();
 </script>
 """
@@ -232,16 +425,21 @@ def speak_reply(text, autoplay=False):
                 // Chrome stops long utterances after ~15 s, so speak in
                 // sentence-sized pieces that queue one after another.
                 const pieces = text.match(/[^.!?\\n]+[.!?]*\\s*/g) || [text];
+                const A = window.troyAudio;
+                if (A) A.gen++;
                 const voice = bestVoice();
+                const list = [];
                 for (const piece of pieces) {{
                     if (piece.trim()) {{
                         const u = new SpeechSynthesisUtterance(piece.trim());
-                        if (voice) {{
+                        if (A) A.tune(u);
+                        else if (voice) {{
                             try {{ u.voice = voice; u.lang = voice.lang; }} catch (e) {{}}
                         }}
-                        window.speechSynthesis.speak(u);
+                        list.push(u);
                     }}
                 }}
+                if (A) A.sayAll(list); else list.forEach(u => window.speechSynthesis.speak(u));
             }}
             // Pick the most natural English voice on this device:
             // Premium/Enhanced (iPhone), Natural/Online (Edge), Google (Chrome).
@@ -867,6 +1065,7 @@ with st.sidebar:
         voice_label = st.selectbox(
             "Troy's voice", list(TTS_VOICES), disabled=not use_human_voice
         )
+        st.html(VOICE_PANEL, unsafe_allow_javascript=True)
         # Keys remembered on this phone fill in when Secrets don't have them.
         phone_keys = st.session_state.saved_keys
         from_phone = []
@@ -1529,19 +1728,23 @@ READ_ALONG_JS = """
   function speakFrom(i0) {
     if (!window.speechSynthesis) return;
     if (window.troyAudio) window.troyAudio.stop(); else speechSynthesis.cancel();
+    const A = window.troyAudio;
     const voice = bestVoice();
+    const list = [];
     spans.slice(i0).forEach((sp, k) => {
       const u = new SpeechSynthesisUtterance(sp.textContent);
       u.rate = RATE;
-      if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch (e) {} }
+      if (A) A.tune(u, RATE);
+      else if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch (e) {} }
       u.onstart = () => { clear(); sp.classList.add("on");
         const sc = document.querySelector('[data-testid="stAppScrollToBottomContainer"]');
         if (sc) { const r = sp.getBoundingClientRect(), h = sc.getBoundingClientRect();
           if (r.bottom > h.bottom - 140 || r.top < h.top + 90)
             sc.scrollBy({ top: r.top - h.top - 120, behavior: "smooth" }); } };
       if (k === spans.length - i0 - 1) u.onend = () => clear();
-      speechSynthesis.speak(u);
+      list.push(u);
     });
+    if (A) A.sayAll(list); else list.forEach(u => speechSynthesis.speak(u));
   }
   // Tap any sentence to start reading from there.
   spans.forEach((sp, i) => sp.addEventListener("click", () => speakFrom(i)));
