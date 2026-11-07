@@ -432,10 +432,9 @@ VOICE_PANEL = """
         "Accessibility > Spoken Content > Voices > English > " + name + ".";
       return;
     }
-    note.textContent = "Using " + vs[0].name + ".";
+    // Just switch quietly: no spoken test and no "Using..." note.
+    note.textContent = "";
     set("voice", vs[0].name);
-    A.stop();
-    A.sayAll(["Hi Paul, this is Troy."].map(t => A.tune(new SpeechSynthesisUtterance(t))));
   }));
   box.querySelectorAll("input[type=range]").forEach(r =>
     r.addEventListener("input", () => set(r.dataset.k, parseFloat(r.value))));
