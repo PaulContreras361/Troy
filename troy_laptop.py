@@ -213,8 +213,20 @@ def _blocks(response):
     return out
 
 
+def _run_extra(call, extra):
+    """A helper AI (Perplexity / ChatGPT / Gemini): no Allow box, nothing on the laptop."""
+    fn = extra[call["name"]][0]
+    try:
+        result = fn(call["input"] or {})
+    except Exception as e:       # noqa: BLE001
+        result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {"type": "tool_result", "tool_use_id": call["id"],
+            "content": [{"type": "text", "text": json.dumps(result, default=str)[:20000]}],
+            "is_error": not result.get("ok", False)}, bool(result.get("ok"))
+
+
 def run(client, model, system, messages=None, level=1, auto=1, state=None,
-        allow=None, max_tokens=4096):
+        allow=None, max_tokens=4096, extra=None):
     """
     Talk to Claude with tools until he has a final answer, or a step needs Paul.
 
@@ -228,7 +240,8 @@ def run(client, model, system, messages=None, level=1, auto=1, state=None,
         state = {"convo": [dict(m) for m in messages], "used": [], "rounds": 0,
                  "said": [], "waiting": None}
     convo = state["convo"]
-    t_list = claude_tools(level)
+    extra = extra or {}
+    t_list = (claude_tools(level) if level > 0 else []) + [d for _, d in extra.values()]
 
     while True:
         if state["waiting"] is not None:
@@ -241,9 +254,16 @@ def run(client, model, system, messages=None, level=1, auto=1, state=None,
                                     "content": "Paul pressed Deny. Don't do this step; ask him "
                                                "what he'd like instead if it matters."})
                     state["used"].append({"name": c["name"], "ok": False, "denied": True})
-                    tools().log_action(c["name"], c["input"], "refused", "denied by Paul")
+                    if level > 0:
+                        tools().log_action(c["name"], c["input"], "refused", "denied by Paul")
                 else:
-                    r, good = _run_tool(c, level)
+                    if c["name"] in extra:
+                        r, good = _run_extra(c, extra)
+                    elif level == 0:
+                        r, good = {"type": "tool_result", "tool_use_id": c["id"], "is_error": True,
+                                   "content": "That tool isn't available here."}, False
+                    else:
+                        r, good = _run_tool(c, level)
                     results.append(r)
                     state["used"].append({"name": c["name"], "ok": good})
             convo.append({"role": "user", "content": results})
@@ -268,6 +288,9 @@ def run(client, model, system, messages=None, level=1, auto=1, state=None,
 
         for c in calls:
             # A step above the current level is simply refused, so no box for it.
+            if c["name"] in extra or level == 0:
+                c["_asked"] = False          # helper AIs never touch the laptop
+                continue
             c["_asked"] = needs_ok(c["name"], auto) and tools().tool_level(c["name"]) <= level
             tools().log_action(c["name"], c["input"], "requested", f"level {tools().tool_level(c['name'])}")
         state["waiting"] = calls

@@ -46,6 +46,15 @@ python -m streamlit run app.py
 
 On Windows, run that from your Troy folder in CMD. `python -m` works even when `streamlit` isn't on your PATH.
 
+## Other AIs Troy can ask
+
+Claude stays the brain. In Settings → **Other AIs Troy can ask**, paste a
+Perplexity key (`pplx-…`) and/or an OpenAI key (`sk-…`); Gemini uses the voice
+key. Then say "ask Perplexity …", "ask ChatGPT …" or "ask Gemini …". Troy shows
+which AI answered and gives his own right / wrong / unverified check. Perplexity
+is also used on its own for anything current, with source links. Keys can also
+go in Streamlit Secrets as `PERPLEXITY_API_KEY` and `OPENAI_API_KEY`.
+
 ## On Paul's Windows laptop (laptop powers)
 
 The same app gains real tools when it runs on Windows (never on the phone/cloud):

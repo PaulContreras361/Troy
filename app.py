@@ -19,6 +19,7 @@ from google import genai
 from PIL import Image
 
 import brain as local_brain     # free Ollama brain on the laptop (brain.py)
+import troy_helpers
 import troy_laptop
 import troy_readers
 import troy_study
@@ -743,6 +744,15 @@ st.html(
 )
 # ---- Keys from Streamlit Secrets or environment ----
 claude_key = ""
+# Other AIs Troy can ask (Settings > Other AIs). Secrets first, then the device.
+pplx_key = openai_key = ""
+try:
+    pplx_key = st.secrets.get("PERPLEXITY_API_KEY", "")
+    openai_key = st.secrets.get("OPENAI_API_KEY", "")
+except Exception:
+    pass
+pplx_key = pplx_key or os.environ.get("PERPLEXITY_API_KEY", "")
+openai_key = openai_key or os.environ.get("OPENAI_API_KEY", "")
 try:
     claude_key = st.secrets["ANTHROPIC_API_KEY"]
 except Exception:
@@ -898,7 +908,8 @@ with st.sidebar:
             try:
                 keys = json.loads(saved["keys"]) or {}
                 st.session_state.saved_keys = {
-                    k: v for k, v in keys.items() if k in ("claude", "gemini") and v
+                    k: v for k, v in keys.items()
+                    if k in ("claude", "gemini", "perplexity", "openai") and v
                 }
             except Exception:
                 pass
@@ -975,12 +986,52 @@ with st.sidebar:
                 st.session_state.keys_payload = json.dumps(st.session_state.saved_keys)
                 st.session_state.keys_rev = uuid4().hex
                 st.rerun()
+        if phone_keys.get("perplexity"):
+            from_phone.append("Perplexity")
+        if phone_keys.get("openai"):
+            from_phone.append("ChatGPT")
         if from_phone:
-            st.caption("🔑 " + " and ".join(from_phone) + " key saved on this device.")
+            st.caption("🔑 " + ", ".join(from_phone) + " key(s) saved on this device.")
             if st.button("Forget saved keys", key="forget_keys", type="tertiary",
                          icon=":material/key_off:"):
                 st.session_state.saved_keys = {}
                 st.session_state.keys_payload = "{}"
+                st.session_state.keys_rev = uuid4().hex
+                st.rerun()
+        # ---- Other AIs Troy can ask (Perplexity, ChatGPT; Gemini uses the voice key)
+        st.markdown("**Other AIs Troy can ask**")
+        pplx_key = pplx_key or phone_keys.get("perplexity", "")
+        openai_key = openai_key or phone_keys.get("openai", "")
+        new_keys = {}
+        if pplx_key:
+            st.caption("✓ Perplexity ready — say “ask Perplexity …” or ask about anything current.")
+        else:
+            new_keys["perplexity"] = st.text_input(
+                "Perplexity API key (starts with pplx-):", type="password", key="type_pplx_key",
+                help="From perplexity.ai → Settings → API. Billed by Perplexity per question.").strip()
+        if openai_key:
+            st.caption("✓ ChatGPT ready — say “ask ChatGPT …”.")
+        else:
+            new_keys["openai"] = st.text_input(
+                "OpenAI API key for ChatGPT (starts with sk-):", type="password", key="type_openai_key",
+                help="From platform.openai.com → API keys. Billed per question; a ChatGPT Plus "
+                "subscription doesn't cover it.").strip()
+        st.caption("✓ Gemini ready — say “ask Gemini …”." if api_key else
+                   "Gemini: add the Gemini key above to ask it too.")
+        new_keys = {k: v for k, v in new_keys.items() if v}
+        bad_new = [k for k, v in new_keys.items()
+                   if (k == "perplexity" and not v.startswith("pplx-"))
+                   or (k == "openai" and (not v.startswith("sk-") or v.startswith("sk-ant-")))]
+        if bad_new:
+            st.warning("That doesn't look like a " + " / ".join(
+                "Perplexity key (pplx-…)" if k == "perplexity" else "OpenAI key (sk-…)"
+                for k in bad_new) + ".")
+        elif new_keys:
+            pplx_key = new_keys.get("perplexity", pplx_key)
+            openai_key = new_keys.get("openai", openai_key)
+            if st.session_state.store_loaded:
+                st.session_state.saved_keys = {**st.session_state.saved_keys, **new_keys}
+                st.session_state.keys_payload = json.dumps(st.session_state.saved_keys)
                 st.session_state.keys_rev = uuid4().hex
                 st.rerun()
         brain = "claude" if claude_key else ("gemini" if api_key else None)
@@ -1328,12 +1379,13 @@ def ask_claude(files, text):
         {"role": "user", "content": claude_blocks(files, text)}
     )
     try:
-        if LAPTOP and lap_level > 0:
+        helpers = helper_tools()
+        if (LAPTOP and lap_level > 0) or helpers:
             with st.spinner("Troy is working on it..."):
                 out = troy_laptop.run(
                     st.session_state.claude, claude_model, laptop_system(),
-                    messages=claude_messages(), level=lap_level, auto=lap_auto,
-                    max_tokens=CLAUDE_MAX_REPLY_TOKENS,
+                    messages=claude_messages(), level=lap_level if LAPTOP else 0, auto=lap_auto,
+                    max_tokens=CLAUDE_MAX_REPLY_TOKENS, extra=helpers,
                 )
             return finish_laptop(out)
         response = st.session_state.claude.messages.create(
@@ -1350,8 +1402,18 @@ def ask_claude(files, text):
     return answer
 
 
+def helper_tools():
+    return troy_helpers.tools(pplx_key, openai_key,
+                              st.session_state.get("client") if api_key else None)
+
+
 def laptop_system():
-    return with_today(TROY_INSTRUCTIONS) + troy_laptop.instructions(lap_level, lap_auto)
+    text = with_today(TROY_INSTRUCTIONS)
+    if LAPTOP and lap_level > 0:
+        text += troy_laptop.instructions(lap_level, lap_auto)
+    if helper_tools():
+        text += troy_helpers.INSTRUCTIONS
+    return text
 
 
 def used_note(used):
@@ -2106,6 +2168,7 @@ def resume_laptop(allow):
             out = troy_laptop.run(
                 st.session_state.claude, claude_model, laptop_system(), state=pending["state"],
                 allow=allow, level=lap_level, auto=lap_auto, max_tokens=CLAUDE_MAX_REPLY_TOKENS,
+                extra=helper_tools(),
             )
         answer, ok = finish_laptop(out), True
     except Exception as e:
