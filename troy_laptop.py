@@ -283,7 +283,7 @@ def run(client, model, system, messages=None, level=1, auto=1, state=None,
         if text:
             state["said"].append(text)
         calls = [dict(b) for b in blocks if b["type"] == "tool_use"]
-        if not calls or response.stop_reason != "tool_use":
+        if not calls or getattr(response, "stop_reason", "tool_use") not in ("tool_use", None):
             return {"type": "done", "text": "\n\n".join(state["said"]).strip(), "used": state["used"]}
 
         for c in calls:

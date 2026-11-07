@@ -642,7 +642,7 @@ DICTATE_JS = """
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;                       // keep the normal mic
   window.troyDictate = true;
-  let rec = null, listening = false, cancelled = false, base = "", said = "";
+  let rec = null, listening = false, cancelled = false, base = "", said = "", off = false;
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
   const box = () => document.querySelector('[data-testid="stChatInputTextArea"]');
   const mic = () => document.querySelector('[data-testid="stChatInputMicButton"]');
@@ -673,8 +673,14 @@ DICTATE_JS = """
     rec.onerror = (e) => {
       cancelled = true;
       const ta2 = box();
-      if (ta2 && (e.error === "not-allowed" || e.error === "service-not-allowed"))
-        ta2.placeholder = "Microphone is blocked: click the lock or 🎤 in the address bar and choose Allow.";
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        if (ta2) ta2.placeholder = "Microphone is blocked: click the lock or 🎤 in the address bar and choose Allow.";
+      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+        // This browser's talk-to-type isn't working: hand the mic back to Troy's
+        // record-and-send mic for the rest of this visit.
+        off = true;
+        if (ta2) ta2.placeholder = "Talk-to-type isn't working here — tap 🎤 again to record instead.";
+      }
     };
     rec.onend = () => {
       listening = false; show(false);
@@ -686,12 +692,12 @@ DICTATE_JS = """
   // Take over the mic button's click before Streamlit sees it.
   window.addEventListener("click", (e) => {
     const m = e.target.closest && e.target.closest('[data-testid="stChatInputMicButton"]');
-    if (!m) return;
+    if (!m || off) return;
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     if (listening && rec) rec.stop(); else start();
   }, true);
   ["pointerdown", "mousedown", "touchstart"].forEach(ev => window.addEventListener(ev, (e) => {
-    if (e.target.closest && e.target.closest('[data-testid="stChatInputMicButton"]')) {
+    if (!off && e.target.closest && e.target.closest('[data-testid="stChatInputMicButton"]')) {
       e.stopPropagation(); e.stopImmediatePropagation();
     }
   }, true));
