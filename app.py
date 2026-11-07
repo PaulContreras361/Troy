@@ -198,11 +198,14 @@ SPEAKER_JS = """
   function dockVoice() {
     const dock = document.querySelector(".st-key-voice_dock");
     const plus = document.querySelector('[data-testid="stChatInputFileUploadButton"]');
-    if (!dock || !plus) return;
+    if (!dock) return;
+    // While the mic is recording, the + button goes away: hide the switch too.
+    const p = plus ? plus.getBoundingClientRect() : null;
+    if (!p || !p.width) { dock.style.opacity = "0"; dock.style.pointerEvents = "none"; return; }
+    dock.style.pointerEvents = "";
     const box = dock.offsetParent || dock.parentElement;
-    const p = plus.getBoundingClientRect(), b = box.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
     const d = dock.getBoundingClientRect();
-    if (!p.width) return;
     dock.style.left = Math.round(p.right - b.left + 10) + "px";
     dock.style.top = Math.round(p.top - b.top + (p.height - d.height) / 2) + "px";
     dock.style.bottom = "auto";
@@ -1281,6 +1284,12 @@ if claude_key and st.session_state.get("claude_key") != claude_key:
     st.session_state.claude_key = claude_key
 if api_key and st.session_state.get("key") != api_key:
     st.session_state.client = genai.Client(api_key=api_key)
+    # Troy's human voice needs Google's "v1beta" address: google-genai 3.0
+    # switched the default to "v1", which rejects voice settings ("Unknown
+    # name speechConfig").
+    st.session_state.tts_client = genai.Client(
+        api_key=api_key, http_options=genai.types.HttpOptions(api_version="v1beta")
+    )
     new_gemini_chat(history_for_brain(st.session_state.messages))
     st.session_state.key = api_key
 
@@ -1290,7 +1299,8 @@ def make_voice(msg):
     try:
         with st.spinner("Troy is getting his voice ready..."):
             msg["audio"] = human_voice(
-                st.session_state.client, msg["text"], TTS_VOICES[voice_label]
+                st.session_state.get("tts_client") or st.session_state.client,
+                msg["text"], TTS_VOICES[voice_label]
             )
     except Exception as e:
         if getattr(e, "code", None) == 429:
