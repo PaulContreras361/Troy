@@ -1,3 +1,5 @@
+import sys
+import array
 import base64
 import html
 import json
@@ -77,8 +79,64 @@ TTS_VOICES = {
 MAX_TTS_CHARS = 2_500
 
 
+def clean_ending(pcm, rate):
+    """Remove the scratch at the end of Gemini's audio.
+
+    Gemini sometimes ends with a click or a short burst of static after the last
+    word, and the sound stops mid-wave (that also clicks). So: find the last
+    real speech, keep a short natural tail, fade it to silence, then add a
+    little true silence so the player stops cleanly.
+    """
+    pcm = pcm[: len(pcm) // 2 * 2]          # whole 16-bit samples only
+    s = array.array("h"); s.frombytes(pcm)
+    if sys.byteorder == "big":
+        s.byteswap()
+    n = len(s)
+    if not n:
+        return pcm
+    win = max(1, rate // 100)                # 10 ms windows
+    loud = [0] * (n // win + 1)
+    for w in range(0, n, win):
+        seg = s[w:w + win]
+        loud[w // win] = sum(abs(v) for v in seg) / len(seg)
+    peak = max(loud) or 1
+    # Speech = windows above 6% of the loudest part. A lone burst after a gap
+    # of quiet (the static) doesn't count as speech.
+    speech = [i for i, a in enumerate(loud) if a > peak * 0.06]
+    end = n
+    if speech:
+        # Group speech windows into pieces split by 250 ms+ of quiet.
+        pieces, start = [], speech[0]
+        for prev, cur in zip(speech, speech[1:]):
+            if cur - prev > 25:
+                pieces.append((start, prev))
+                start = cur
+        pieces.append((start, speech[-1]))
+        # A short last piece (under 100 ms) after a pause is the static burst.
+        if len(pieces) > 1 and pieces[-1][1] - pieces[-1][0] < 10:
+            pieces.pop()
+        last = pieces[-1][1]
+        end = min(n, (last + 1) * win + rate * 120 // 1000)   # keep a 120 ms tail
+    fade = min(end, rate * 60 // 1000)       # 60 ms fade-out
+    out = s[:end]
+    for k in range(fade):
+        j = end - fade + k
+        out[j] = int(out[j] * (1 - (k + 1) / fade))
+    fin = min(len(out), rate * 5 // 1000)    # 5 ms fade-in (no click at the start)
+    for k in range(fin):
+        out[k] = int(out[k] * k / fin)
+    out.extend([0] * (rate * 150 // 1000))   # 150 ms of real silence
+    if sys.byteorder == "big":
+        out.byteswap()
+    return out.tobytes()
+
+
 def pcm_to_wav(pcm, rate=24_000):
     """Gemini sends raw 16-bit mono sound; wrap it so phones can play it."""
+    try:
+        pcm = clean_ending(pcm, rate)
+    except Exception:
+        pass
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
