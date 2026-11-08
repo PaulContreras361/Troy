@@ -213,6 +213,24 @@ SPEAKER_JS = """
     dock.style.bottom = "auto";
     dock.style.opacity = "1";
   }
+  function dockTalk() {
+    const dock = document.querySelector(".st-key-talk_dock");
+    const mic = document.querySelector('[data-testid="stChatInputMicButton"]');
+    if (!dock) return;
+    const m = mic ? mic.getBoundingClientRect() : null;
+    const talking = window.troyTalk && window.troyTalk.on;
+    // Hide while the normal mic is recording (its button goes away), unless Talk is on.
+    if ((!m || !m.width) && !talking) { dock.style.opacity = "0"; dock.style.pointerEvents = "none"; return; }
+    dock.style.pointerEvents = "";
+    if (!m || !m.width) return;
+    const box = dock.offsetParent || dock.parentElement;
+    const b = box.getBoundingClientRect(), d = dock.getBoundingClientRect();
+    dock.style.left = Math.round(m.left - b.left - d.width - 8) + "px";
+    dock.style.top = Math.round(m.top - b.top + (m.height - d.height) / 2) + "px";
+    dock.style.bottom = "auto";
+    dock.style.opacity = "1";
+  }
+  setInterval(dockTalk, 250);
   setInterval(dockVoice, 250);
   window.addEventListener("resize", dockVoice);
   if (window.visualViewport) window.visualViewport.addEventListener("resize", dockVoice);
@@ -454,6 +472,182 @@ VOICE_PANEL = """
 })();
 </script>
 """
+
+# ---- Talk mode: a hands-free conversation, like Claude's voice mode ----
+# Tap Talk once. Troy listens; when Paul stops talking (about 1.3 seconds of
+# quiet) the recording is sent by itself, Troy answers out loud, and then he
+# listens again. The mic is shut off while Troy talks so he doesn't hear
+# himself. Tap Talk again to stop.
+TALK_HTML = '<button type="button" class="troy-talk" aria-label="Talk with Troy">' \
+    '<span class="tt-bars"><i></i><i></i><i></i><i></i></span><span class="tt-label">Talk</span></button>'
+TALK_CSS = """
+.troy-talk { display:inline-flex; align-items:center; gap:0.35rem; height:2.4rem;
+  padding:0 0.8rem; border-radius:999px; border:1px solid rgba(128,128,128,.45);
+  background:transparent; color:inherit; font:inherit; font-size:0.95rem; cursor:pointer;
+  -webkit-tap-highlight-color: transparent; }
+.troy-talk .tt-bars { display:inline-flex; align-items:center; gap:2px; height:1rem; }
+.troy-talk .tt-bars i { display:block; width:3px; height:40%; border-radius:2px; background:currentColor; }
+.troy-talk .tt-bars i:nth-child(2) { height:90%; } .troy-talk .tt-bars i:nth-child(3) { height:65%; }
+.troy-talk.listening, .troy-talk.hearing, .troy-talk.thinking, .troy-talk.speaking {
+  border-color:#0ea5a4; background:rgba(14,165,164,.18); }
+.troy-talk.hearing { background:rgba(14,165,164,.4); }
+.troy-talk.thinking { border-color:#d9a441; background:rgba(217,164,65,.18); }
+.troy-talk.listening .tt-bars i, .troy-talk.hearing .tt-bars i, .troy-talk.speaking .tt-bars i {
+  animation: ttpulse 0.9s ease-in-out infinite; }
+.troy-talk .tt-bars i:nth-child(2) { animation-delay:.15s; } .troy-talk .tt-bars i:nth-child(3) { animation-delay:.3s; }
+.troy-talk .tt-bars i:nth-child(4) { animation-delay:.45s; }
+@keyframes ttpulse { 0%,100% { transform:scaleY(.5); } 50% { transform:scaleY(1.1); } }
+"""
+TALK_JS = """
+export default function(component) {
+  const { parentElement, data, setTriggerValue } = component;
+  const btn = parentElement.querySelector(".troy-talk");
+  if (!btn) return;
+  const label = btn.querySelector(".tt-label");
+  const T = window.troyTalk = window.troyTalk || { on: false, state: "off", rev: null };
+  T.send = setTriggerValue;
+  const LABELS = { off: "Talk", listening: "Listening", hearing: "Listening",
+                   thinking: "Thinking", speaking: "Troy", };
+  function show(s) {
+    T.state = s;
+    btn.className = "troy-talk" + (s === "off" ? "" : " " + s);
+    label.textContent = LABELS[s] || "Talk";
+  }
+  T.show = show;
+  show(T.state);
+
+  const session = (t) => { if (window.troySession) window.troySession(t); };
+  const audio = () => window.troyAudio;
+  function troySpeaking() {
+    const A = audio();
+    const el = A && A.el, q = A && A.eq && A.eq.el;
+    return (el && !el.paused && !el.ended && el.currentTime > 0) ||
+           (q && !q.paused && !q.ended && q.currentTime > 0) ||
+           (window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending));
+  }
+  const streamlitBusy = () => !!document.querySelector('[data-testid="stStatusWidget"]');
+
+  function stopMic() {
+    if (T.proc) { try { T.proc.disconnect(); } catch (e) {} T.proc = null; }
+    if (T.src) { try { T.src.disconnect(); } catch (e) {} T.src = null; }
+    if (T.stream) { T.stream.getTracks().forEach(t => t.stop()); T.stream = null; }
+  }
+
+  async function listen() {
+    if (!T.on) return;
+    stopMic();
+    session("play-and-record");
+    try {
+      T.stream = await navigator.mediaDevices.getUserMedia({ audio: {
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) { T.on = false; show("off"); return; }
+    if (!T.on) { stopMic(); return; }
+    const ctx = T.ctx;
+    try { await ctx.resume(); } catch (e) {}
+    T.src = ctx.createMediaStreamSource(T.stream);
+    T.proc = ctx.createScriptProcessor(4096, 1, 1);
+    const rate = ctx.sampleRate, keep = [], pre = [];
+    let floor = 0.01, frames = 0, speech = false, quietMs = 0, spokeMs = 0, waitedMs = 0;
+    T.proc.onaudioprocess = (ev) => {
+      if (!T.on || T.state === "thinking") return;
+      const x = ev.inputBuffer.getChannelData(0);
+      const chunk = new Float32Array(x);
+      let sum = 0; for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
+      const rms = Math.sqrt(sum / x.length), ms = 1000 * x.length / rate;
+      frames++;
+      if (frames <= 4) { floor = Math.max(floor, rms); return; }   // learn the room's noise
+      const loud = rms > Math.max(0.02, floor * 2.5);
+      if (!speech) {
+        pre.push(chunk); if (pre.length > 6) pre.shift();            // keep ~0.5 s before speech
+        floor = floor * 0.98 + rms * 0.02;
+        waitedMs += ms;
+        if (loud) { speech = true; keep.push(...pre); show("hearing"); }
+        else if (waitedMs > 60000) { waitedMs = 0; }                  // just keep waiting
+        return;
+      }
+      keep.push(chunk); spokeMs += ms;
+      quietMs = loud ? 0 : quietMs + ms;
+      if (quietMs > 1300 || spokeMs > 45000) finish(keep, rate);
+    };
+    T.src.connect(T.proc); T.proc.connect(ctx.destination);
+    show("listening");
+  }
+
+  function finish(chunks, rate) {
+    show("thinking");
+    stopMic();
+    session("playback");
+    // 16 kHz mono WAV: small, and Gemini reads it reliably.
+    const step = rate / 16000, total = chunks.reduce((n, c) => n + c.length, 0);
+    const flat = new Float32Array(total); let o = 0;
+    chunks.forEach(c => { flat.set(c, o); o += c.length; });
+    const n = Math.floor(total / step), pcm = new Int16Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = Math.max(-1, Math.min(1, flat[Math.floor(i * step)]));
+      pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    const buf = new ArrayBuffer(44 + pcm.length * 2), dv = new DataView(buf);
+    const w = (p, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(p + i, s.charCodeAt(i)); };
+    w(0, "RIFF"); dv.setUint32(4, 36 + pcm.length * 2, true); w(8, "WAVE"); w(12, "fmt ");
+    dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, 16000, true); dv.setUint32(28, 32000, true); dv.setUint16(32, 2, true);
+    dv.setUint16(34, 16, true); w(36, "data"); dv.setUint32(40, pcm.length * 2, true);
+    new Int16Array(buf, 44).set(pcm);
+    const bytes = new Uint8Array(buf); let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    T.waitingSince = Date.now();
+    T.send("utterance", JSON.stringify({ id: Date.now(), mime: "audio/wav", b64: btoa(bin) }));
+  }
+
+  // After Python handles a turn it bumps data.rev. Wait for Troy to finish
+  // drawing and talking, then listen again.
+  if (data && data.rev && data.rev !== T.rev) {
+    const first = T.rev === null;
+    T.rev = data.rev;
+    if (!first && T.on && T.state === "thinking") {
+      const started = Date.now();
+      let quietSince = 0;
+      const tick = () => {
+        if (!T.on) return;
+        const busy = streamlitBusy(), talking = troySpeaking();
+        if (talking && T.state !== "speaking") show("speaking");
+        if (!busy && !talking && Date.now() - started > 1500) {
+          if (!quietSince) quietSince = Date.now();
+          if (Date.now() - quietSince > 900) { listen(); return; }
+        } else quietSince = 0;
+        setTimeout(tick, 250);
+      };
+      tick();
+    }
+  }
+
+  if (!btn.dataset.ready) {
+    btn.dataset.ready = "1";
+    btn.addEventListener("click", () => {
+      if (T.on) {
+        T.on = false; stopMic(); session("playback"); show("off");
+        if (audio()) audio().stop();
+        return;
+      }
+      T.on = true;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!T.ctx && AC) T.ctx = new AC();
+      if (!T.ctx) { T.on = false; return; }
+      T.ctx.resume();
+      if (audio()) audio().stop();
+      listen();
+    });
+  }
+}
+"""
+
+
+@st.cache_resource
+def troy_talk():
+    return st.components.v2.component(
+        "troy_talk", html=TALK_HTML, css=TALK_CSS, js=TALK_JS, isolate_styles=False
+    )
+
 
 
 def play_voice(wav_bytes):
@@ -720,6 +914,16 @@ st.markdown(
         opacity: 0;  /* the page helper shows it once it's lined up */
     }
     .st-key-voice_dock [data-testid="stTooltipIcon"] { display: none; }
+    .st-key-talk_dock {
+        position: absolute !important;
+        z-index: 5;
+        right: 7rem;
+        bottom: 1.4rem;
+        opacity: 0;
+    }
+    .st-key-talk_dock, .st-key-talk_dock div {
+        width: max-content !important; min-width: 0 !important; flex: 0 0 auto !important;
+    }
     .st-key-voice_dock label { gap: 0.3rem; margin: 0; }
     .st-key-voice_dock label p { font-size: 1.15rem; }
     [data-testid="stChatInputSubmitButton"]:disabled {
@@ -904,6 +1108,14 @@ auto_speak = st.bottom.container(key="voice_dock").toggle(
     "🔊", value=True, key="voice_on",
     help="Troy speaks out loud. On: Troy reads every reply aloud by himself. Off: he stays quiet.",
 )
+# Talk mode button (see TALK_JS); the page helper slides it next to the mic.
+if "talk_rev" not in st.session_state:
+    st.session_state.talk_rev = uuid4().hex
+with st.bottom.container(key="talk_dock"):
+    talk = troy_talk()(
+        data={"rev": st.session_state.talk_rev},
+        key="troy_talk", on_utterance_change=lambda: None,
+    )
 # One page helper, drawn on EVERY run so the layout never shifts. (If it only
 # appeared sometimes, Streamlit would think the attach panel was new and close it.)
 page_jobs = []
@@ -2126,6 +2338,35 @@ def ask_study_question(question):
 
 if st.session_state.study_on:
     render_study()
+
+# ---- Talk mode: Paul spoke and paused, so the recording came in by itself ----
+talk_said = None
+if talk is not None and getattr(talk, "utterance", None):
+    try:
+        clip = json.loads(talk.utterance)
+        clip_bytes = base64.b64decode(clip["b64"])
+    except Exception:
+        clip_bytes = b""
+    spoke = False
+    if clip_bytes and len(clip_bytes) <= MAX_AUDIO_BYTES and api_key and brain:
+        try:
+            with st.spinner("Listening..."):
+                talk_said = transcribe(clip_bytes, "audio/wav")
+        except Exception:
+            talk_said = None
+    if talk_said and talk_said.strip(" .") :
+        auto_speak = True  # in a conversation Troy always answers out loud
+        if st.session_state.study_on and st.session_state.study:
+            ask_study_question(talk_said)
+        else:
+            send_to_troy("🎤 " + talk_said, [], talk_said)
+        spoke = True
+    elif not api_key:
+        st.session_state.talk_note = "Talk needs the Gemini key (it writes down what you say)."
+    st.session_state.talk_rev = uuid4().hex  # tells the Talk button to listen again
+    st.rerun()
+if st.session_state.get("talk_note"):
+    st.warning(st.session_state.pop("talk_note"))
 
 if st.session_state.study_on and (prompt or send_voice or attached):
     has_files = bool(attached)
