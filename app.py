@@ -210,7 +210,10 @@ SPEAKER_JS = """
   // Play even when the iPhone ringer switch is on silent (Safari 17+).
   // But "playback" also blocks the microphone, so switch to "play-and-record"
   // the moment the mic button is touched, and back to "playback" for replies.
-  const session = (t) => { try { if (navigator.audioSession) navigator.audioSession.type = t; } catch (e) {} };
+  const session = (t) => {
+    if (t === "playback" && window.troyTalk && window.troyTalk.on) return;  // mic stays open in Talk
+    try { if (navigator.audioSession) navigator.audioSession.type = t; } catch (e) {}
+  };
   session("playback");
   ["pointerdown", "touchstart", "mousedown"].forEach(ev => document.addEventListener(ev, (e) => {
     const t = e.target;
@@ -591,50 +594,59 @@ export default function(component) {
     if (T.stream) { T.stream.getTracks().forEach(t => t.stop()); T.stream = null; }
   }
 
-  async function listen() {
-    if (!T.on) return;
-    stopMic();
+  // The mic opens ONCE when Talk starts and stays open until Talk ends.
+  // (Opening and closing it every turn made the iPhone switch audio modes,
+  // which clicks right after Troy's last word.) While Troy thinks or talks,
+  // the mic's sound is simply ignored.
+  async function openMic() {
     session("play-and-record");
     try {
       T.stream = await navigator.mediaDevices.getUserMedia({ audio: {
-        echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    } catch (e) { T.on = false; show("off"); return; }
-    if (!T.on) { stopMic(); return; }
+        echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+    } catch (e) { T.on = false; show("off"); return false; }
+    if (!T.on) { stopMic(); return false; }
     const ctx = T.ctx;
     try { await ctx.resume(); } catch (e) {}
     T.src = ctx.createMediaStreamSource(T.stream);
     T.proc = ctx.createScriptProcessor(4096, 1, 1);
-    const rate = ctx.sampleRate, keep = [], pre = [];
-    let floor = 0.01, frames = 0, speech = false, quietMs = 0, spokeMs = 0, waitedMs = 0;
-    T.proc.onaudioprocess = (ev) => {
-      if (!T.on || T.state === "thinking") return;
-      const x = ev.inputBuffer.getChannelData(0);
-      const chunk = new Float32Array(x);
-      let sum = 0; for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
-      const rms = Math.sqrt(sum / x.length), ms = 1000 * x.length / rate;
-      frames++;
-      if (frames <= 4) { floor = Math.max(floor, rms); return; }   // learn the room's noise
-      const loud = rms > Math.max(0.02, floor * 2.5);
-      if (!speech) {
-        pre.push(chunk); if (pre.length > 6) pre.shift();            // keep ~0.5 s before speech
-        floor = floor * 0.98 + rms * 0.02;
-        waitedMs += ms;
-        if (loud) { speech = true; keep.push(...pre); show("hearing"); }
-        else if (waitedMs > 60000) { waitedMs = 0; }                  // just keep waiting
-        return;
-      }
-      keep.push(chunk); spokeMs += ms;
-      quietMs = loud ? 0 : quietMs + ms;
-      if (quietMs > 1300 || spokeMs > 45000) finish(keep, rate);
-    };
+    T.rate = ctx.sampleRate;
+    T.proc.onaudioprocess = (ev) => hearChunk(ev.inputBuffer.getChannelData(0));
     T.src.connect(T.proc); T.proc.connect(ctx.destination);
+    return true;
+  }
+
+  function listen() {
+    if (!T.on) return;
+    T.keep = []; T.pre = []; T.speech = false; T.quietMs = 0; T.spokeMs = 0;
+    T.peak = 0; T.skipMs = 350;            // ignore the first moment (echo of Troy)
     show("listening");
+  }
+
+  function hearChunk(x) {
+    if (!T.on || (T.state !== "listening" && T.state !== "hearing")) return;
+    const chunk = new Float32Array(x);
+    let sum = 0; for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
+    const rms = Math.sqrt(sum / x.length), ms = 1000 * x.length / T.rate;
+    if (T.skipMs > 0) { T.skipMs -= ms; T.floor = Math.max(T.floor || 0.003, rms * 0.8); return; }
+    if (!T.speech) {
+      T.pre.push(chunk); if (T.pre.length > 6) T.pre.shift();      // ~0.5 s before speech
+      T.floor = T.floor * 0.95 + rms * 0.05;                       // follow the room's noise
+      if (rms > Math.max(0.015, T.floor * 3)) {
+        T.speech = true; T.keep.push(...T.pre); T.peak = rms; show("hearing");
+      }
+      return;
+    }
+    T.keep.push(chunk); T.spokeMs += ms;
+    T.peak = Math.max(T.peak, rms);
+    // "Quiet" means well below how loud Paul was talking, even if the room
+    // never goes fully silent (fans, TV, road noise).
+    const quiet = rms < Math.max(T.floor * 1.8, T.peak * 0.22);
+    T.quietMs = quiet ? T.quietMs + ms : 0;
+    if ((T.quietMs > 1100 && T.spokeMs > 500) || T.spokeMs > 45000) finish(T.keep, T.rate);
   }
 
   function finish(chunks, rate) {
     show("thinking");
-    stopMic();
-    session("playback");
     // 16 kHz mono WAV: small, and Gemini reads it reliably.
     const step = rate / 16000, total = chunks.reduce((n, c) => n + c.length, 0);
     const flat = new Float32Array(total); let o = 0;
@@ -681,9 +693,12 @@ export default function(component) {
 
   if (!btn.dataset.ready) {
     btn.dataset.ready = "1";
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
+      // Tap while Troy is hearing you = "I'm done, send it now".
+      if (T.on && T.state === "hearing" && T.keep && T.keep.length) { finish(T.keep, T.rate); return; }
       if (T.on) {
-        T.on = false; stopMic(); session("playback"); show("off");
+        T.on = false; stopMic(); show("off");
+        session("playback");
         if (audio()) audio().stop();
         return;
       }
@@ -693,7 +708,7 @@ export default function(component) {
       if (!T.ctx) { T.on = false; return; }
       T.ctx.resume();
       if (audio()) audio().stop();
-      listen();
+      if (await openMic()) listen();
     });
   }
 }
