@@ -35,6 +35,9 @@ CLAUDE_MAX_REPLY_TOKENS = 4_096
 HISTORY_MESSAGES = 24       # how many past messages Claude sees
 FILE_MEMORY_MESSAGES = 6    # files stay attached for this many recent messages
 
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MAX_XLSX_CHARS = 400_000   # text sent from one workbook (about 100k tokens)
+
 # File types Troy can read. HEIC is left out on purpose: then the iPhone hands
 # over photos as JPEG, which both Claude and Gemini can read.
 FILE_TYPES = {
@@ -46,6 +49,7 @@ FILE_TYPES = {
     "txt": "text/plain",
     "md": "text/plain",
     "csv": "text/csv",
+    "xlsx": XLSX_MIME,          # Excel: turned into text, every tab, before sending
     "zip": "application/zip",   # unpacked; the readable files inside are used
 }
 
@@ -1754,6 +1758,61 @@ def unzip(name, data):
     return found, skipped, None
 
 
+def _cell_text(v):
+    if isinstance(v, datetime):
+        return v.strftime("%m/%d/%Y") if not (v.hour or v.minute) else v.strftime("%m/%d/%Y %H:%M")
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).replace("\n", " ").strip()
+
+
+def xlsx_to_text(name, data):
+    """Read every tab of an Excel workbook into plain text Troy's brain can read.
+    Each line is one row, with the Excel row number and column letters, so Troy can
+    point Paul at exact cells (e.g. "Master row 9, column Y"). Formulas come through
+    as the last value Excel saved. Returns (text bytes, problem)."""
+    try:
+        import openpyxl
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return None, "Troy's Excel reader (openpyxl) isn't installed. Add it to requirements.txt."
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        wbf = openpyxl.load_workbook(io.BytesIO(data), data_only=False, read_only=True)
+    except Exception:
+        return None, f"Troy couldn't open {name}. Save it as a normal .xlsx and try again."
+    out = [f"Excel workbook {name} — tabs: " + ", ".join(wb.sheetnames)]
+    size, cut = 0, False
+    for ws, wsf in zip(wb.worksheets, wbf.worksheets):
+        out.append(f"\n=== Tab: {ws.title} ===")
+        rows = zip(ws.iter_rows(values_only=True), wsf.iter_rows(values_only=True))
+        for r, (row, frow) in enumerate(rows, start=1):
+            cells = []
+            for c, v in enumerate(row, start=1):
+                if v is None or str(v).strip() == "":
+                    # A formula with no saved answer (file never opened in Excel):
+                    # show the formula so Troy still knows what the cell does.
+                    f = frow[c - 1] if c - 1 < len(frow) else None
+                    if isinstance(f, str) and f.startswith("="):
+                        cells.append(f"{get_column_letter(c)}=[formula {f}]")
+                    continue
+                cells.append(f"{get_column_letter(c)}={_cell_text(v)}")
+            if not cells:
+                continue
+            line = f"Row {r}: " + " | ".join(cells)
+            size += len(line)
+            if size > MAX_XLSX_CHARS:
+                cut = True
+                break
+            out.append(line)
+        if cut:
+            out.append("[… the rest of the workbook was cut off — it's too big to send at once]")
+            break
+    wb.close()
+    wbf.close()
+    return "\n".join(out).encode("utf-8"), None
+
+
 def file_parts(files):
     """Read uploaded files into a simple list. Returns (files, problem)."""
     if len(files) > MAX_FILES:
@@ -1766,19 +1825,24 @@ def file_parts(files):
         ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
         mime = FILE_TYPES.get(ext)
         if mime is None:
-            return None, f"Troy can't read {f.name}. Use a PDF, photo, text file, or zip."
+            return None, f"Troy can't read {f.name}. Use a PDF, photo, text file, Excel (.xlsx), or zip."
         if ext == "zip":
             inside, skipped, problem = unzip(f.name, data)
             if problem:
                 return None, problem
             if not inside:
                 return None, (f"Nothing in {f.name} that Troy can read — he takes PDFs, "
-                              "photos, and .txt/.csv/.md files.")
+                              "photos, Excel (.xlsx), and .txt/.csv/.md files.")
             st.session_state.zip_note = (f.name, [x["name"] for x in inside], skipped)
             items = inside
         else:
             items = [{"name": f.name, "mime": mime, "data": data}]
         for item in items:
+            if item["mime"] == XLSX_MIME:   # both brains get the workbook as text
+                body, problem = xlsx_to_text(item["name"], item["data"])
+                if problem:
+                    return None, problem
+                item["data"], item["mime"] = body, "text/plain"
             try:
                 item["data"], item["mime"] = shrink_photo(item["data"], item["mime"])
             except Exception:
@@ -1822,7 +1886,9 @@ def claude_messages():
         if isinstance(content, list) and i < len(hist) - FILE_MEMORY_MESSAGES:
             kept = []
             for b in content:
-                if b["type"] in ("image", "document"):
+                big_text_file = (b["type"] == "text" and b["text"].startswith("File ")
+                                 and len(b["text"]) > 4000)   # e.g. an Excel workbook
+                if b["type"] in ("image", "document") or big_text_file:
                     kept.append({"type": "text", "text": "[a file Paul shared earlier]"})
                 else:
                     kept.append(b)
