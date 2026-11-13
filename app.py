@@ -37,6 +37,8 @@ FILE_MEMORY_MESSAGES = 6    # files stay attached for this many recent messages
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MAX_XLSX_CHARS = 400_000   # text sent from one workbook (about 100k tokens)
+CODE_MIME = "text/x-troy-code"   # marker only: converted to text/plain before sending
+MAX_CODE_CHARS = 400_000   # code sent from one file after the bulk data is cut out
 
 # File types Troy can read. HEIC is left out on purpose: then the iPhone hands
 # over photos as JPEG, which both Claude and Gemini can read.
@@ -50,6 +52,14 @@ FILE_TYPES = {
     "md": "text/plain",
     "csv": "text/csv",
     "xlsx": XLSX_MIME,          # Excel: turned into text, every tab, before sending
+    # Paul's own code and single-file apps. Big embedded data (images, map
+    # coordinates) is cut out first so the code itself fits — see code_to_text.
+    "html": CODE_MIME,
+    "htm": CODE_MIME,
+    "py": CODE_MIME,
+    "js": CODE_MIME,
+    "json": CODE_MIME,
+    "css": CODE_MIME,
     "zip": "application/zip",   # unpacked; the readable files inside are used
 }
 
@@ -1813,6 +1823,46 @@ def xlsx_to_text(name, data):
     return "\n".join(out).encode("utf-8"), None
 
 
+_B64_DATA = re.compile(r"data:[\w/+.\-]+;base64,[A-Za-z0-9+/=\s]{300,}")
+_LONG_STRING = re.compile(r"(\"|'|`)(?:(?!\1)[^\\\n]|\\.){2000,}?\1")
+_LONG_NUMBERS = re.compile(r"(?:[\d\s.,:\-+\[\]{}\"']|\b[A-Za-z_]{1,3}\b){3000,}")   # coordinate arrays etc.
+
+
+def code_to_text(name, data):
+    """Get an HTML/code file ready for Troy's brain. Single-file apps often carry
+    megabytes of embedded images or map data; that's cut out (with a note saying
+    how much) so the actual code fits in what the brain can read."""
+    text = data.decode("utf-8", errors="replace")
+    original = len(text)
+    cut = {"images/files": 0, "long text/data": 0}
+
+    def _img(m):
+        cut["images/files"] += 1
+        kind = m.group(0)[5:m.group(0).find(";")]
+        return f"data:{kind};base64,[embedded {kind}, {len(m.group(0)) // 1024} KB, cut by Troy]"
+
+    def _data(m):
+        s = m.group(0)
+        if len(s) < 3000:
+            return s
+        cut["long text/data"] += 1
+        return s[:400] + f" …[{len(s) // 1024} KB of data cut by Troy]… " + s[-100:]
+
+    text = _B64_DATA.sub(_img, text)
+    text = _LONG_STRING.sub(_data, text)
+    text = _LONG_NUMBERS.sub(_data, text)
+    note = ""
+    if len(text) > MAX_CODE_CHARS:   # still too big: keep the start and the end
+        head, tail = text[: MAX_CODE_CHARS * 3 // 4], text[-MAX_CODE_CHARS // 4:]
+        text = head + f"\n\n…[{(len(text) - len(head) - len(tail)) // 1024} KB from the middle cut by Troy]…\n\n" + tail
+        note = " The middle of the file was also cut to fit."
+    if len(text) < original:
+        pieces = ", ".join(f"{n} {k}" for k, n in cut.items() if n)
+        note = (f"[Troy's note: {name} was {original // 1024} KB. Bulk data was cut so the code fits"
+                + (f" ({pieces})" if pieces else "") + f"; {len(text) // 1024} KB shown.{note}]\n")
+    return (note + text).encode("utf-8")
+
+
 def file_parts(files):
     """Read uploaded files into a simple list. Returns (files, problem)."""
     if len(files) > MAX_FILES:
@@ -1825,14 +1875,14 @@ def file_parts(files):
         ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
         mime = FILE_TYPES.get(ext)
         if mime is None:
-            return None, f"Troy can't read {f.name}. Use a PDF, photo, text file, Excel (.xlsx), or zip."
+            return None, f"Troy can't read {f.name}. Use a PDF, photo, text or code file (HTML, .py, .js), Excel (.xlsx), or zip."
         if ext == "zip":
             inside, skipped, problem = unzip(f.name, data)
             if problem:
                 return None, problem
             if not inside:
                 return None, (f"Nothing in {f.name} that Troy can read — he takes PDFs, "
-                              "photos, Excel (.xlsx), and .txt/.csv/.md files.")
+                              "photos, Excel (.xlsx), HTML/code, and .txt/.csv/.md files.")
             st.session_state.zip_note = (f.name, [x["name"] for x in inside], skipped)
             items = inside
         else:
@@ -1843,6 +1893,8 @@ def file_parts(files):
                 if problem:
                     return None, problem
                 item["data"], item["mime"] = body, "text/plain"
+            elif item["mime"] == CODE_MIME:
+                item["data"], item["mime"] = code_to_text(item["name"], item["data"]), "text/plain"
             try:
                 item["data"], item["mime"] = shrink_photo(item["data"], item["mime"])
             except Exception:
