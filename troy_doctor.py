@@ -42,10 +42,18 @@ except OSError:
     _dir.mkdir(parents=True, exist_ok=True)
 LOG_FILE = _dir / "errors.jsonl"
 MAX_LOG = 200
+# Extra permanent copies of the log (e.g. E:\Troy\History on the laptop drive).
+MIRRORS = []
+
+
+def add_mirror(path):
+    path = Path(path)
+    if path not in MIRRORS:
+        MIRRORS.append(path)
 
 # Files the repair job may change. Not this file: the doctor stays fixed so a bad
 # repair can never break the Approve / Undo buttons.
-REPAIRABLE = ["app.py", "troy_study.py", "troy_memory.py", "requirements.txt"]
+REPAIRABLE = ["app.py", "troy_study.py", "troy_memory.py", "troy_drive.py", "requirements.txt"]
 REPAIR_MODEL = "claude-sonnet-5-5"
 FIX_BRANCH_PREFIX = "troy-fix-"
 
@@ -97,6 +105,12 @@ def log_error(where, err=None, detail="", source="troy"):
                 return
         with LOG_FILE.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
+        for m in MIRRORS:      # permanent history; never trimmed
+            try:
+                with m.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry) + "\n")
+            except OSError:
+                pass
         if len(log) >= MAX_LOG:
             _write_log(list(reversed(log))[-MAX_LOG + 1:] + [entry])
     except Exception:
@@ -382,7 +396,7 @@ def _check(results, name, fn):
     results.append({"name": name, "ok": bool(ok), "note": note})
 
 
-def offline_checks(app_src=None, study_src=None, memory_src=None):
+def offline_checks(app_src=None, study_src=None, memory_src=None, drive_src=None):
     """Everything that can be tested without the internet. Takes source text so
     a proposed repair can be tested before it ever goes live."""
     if app_src is None:
@@ -394,6 +408,11 @@ def offline_checks(app_src=None, study_src=None, memory_src=None):
             memory_src = (HERE / "troy_memory.py").read_text(encoding="utf-8")
         except OSError:
             memory_src = ""
+    if drive_src is None:
+        try:
+            drive_src = (HERE / "troy_drive.py").read_text(encoding="utf-8")
+        except OSError:
+            drive_src = ""
     results = []
 
     def compiles(src, fname):
@@ -568,13 +587,57 @@ def offline_checks(app_src=None, study_src=None, memory_src=None):
         return (good, f"small talk → {quick[2]}; real work → {work[2]}" if good
                 else "Troy decides is routing questions to the wrong model")
     _check(results, "How Troy thinks: picks quick vs deep", t_think)
+
+    def t_drive():
+        import tempfile
+        mod = types.ModuleType("troy_drive_under_test")
+        exec(compile(drive_src, "troy_drive.py", "exec"), mod.__dict__)
+        with tempfile.TemporaryDirectory() as tmp:
+            drive = Path(tmp) / "E"
+            (drive / "EPR" / "2026").mkdir(parents=True)
+            (drive / "EPR" / "2026" / "notes.txt").write_text("NKC23 finished 11/11")
+            (Path(tmp) / "outside.txt").write_text("not on the drive")
+            mod.configure(drive)
+            mod.on_laptop = lambda: True
+            problems = []
+            if mod.status() != "ready" or not (drive / "Troy" / "History").is_dir():
+                problems.append("Troy's folder wasn't set up")
+            real, why = mod.resolve("EPR")
+            if why or not mod.needs_permission(real, set()):
+                problems.append("looking outside Troy's folder didn't ask first")
+            if mod.needs_permission(real, {str(real)}):
+                problems.append("'Allow this folder' didn't stick")
+            if mod.needs_permission(mod.resolve("Troy/Files")[0], set()):
+                problems.append("Troy's own folder asked for permission")
+            for bad in ("../outside.txt", str(Path(tmp) / "outside.txt"), "$RECYCLE.BIN"):
+                if mod.resolve(bad)[0] is not None:
+                    problems.append(f"fence let Troy reach {bad}")
+            if "notes.txt" not in mod.run("drive_find", {"name_contains": "notes", "folder": ""}):
+                problems.append("find didn't find the file")
+            if "NKC23" not in mod.run("drive_read", {"path": "EPR/2026/notes.txt"}):
+                problems.append("couldn't read a text file")
+            if "Not allowed" not in mod.run("drive_read", {"path": "../outside.txt"}):
+                problems.append("read a file outside the drive")
+            a = mod.run("drive_save", {"name": "summary.md", "content": "one"})
+            b = mod.run("drive_save", {"name": "summary.md", "content": "two"})
+            files = sorted(x.name for x in (drive / "Troy" / "Files").iterdir())
+            if files != ["summary (2).md", "summary.md"] or \
+                    (drive / "Troy" / "Files" / "summary.md").read_text() != "one":
+                problems.append(f"save overwrote or misnamed files: {files}")
+            mod.configure(Path(tmp) / "not-plugged-in")
+            if mod.status() != "unplugged":
+                problems.append("an unplugged drive wasn't noticed")
+        return (not problems, "asks before looking outside E:\\Troy, fence holds, never overwrites, "
+                "notices when unplugged" if not problems else "; ".join(problems))
+    _check(results, "Drive: permission, fence, save, unplugged", t_drive)
     return results
 
 
 def startup_signature():
     """Changes whenever Troy's code changes, so the startup check re-runs."""
     sig = []
-    for f in ("app.py", "troy_study.py", "troy_memory.py", "troy_doctor.py", "requirements.txt"):
+    for f in ("app.py", "troy_study.py", "troy_memory.py", "troy_drive.py", "troy_doctor.py",
+              "requirements.txt"):
         try:
             s = (HERE / f).stat()
             sig.append(f"{f}:{s.st_size}:{int(s.st_mtime)}")
@@ -777,7 +840,7 @@ def propose_fix(claude_client, github, problems_text, progress=lambda s: None):
     for f in REPAIRABLE:
         files[f], shas[f] = github.get_file(f)
     baseline = _failures(offline_checks(files["app.py"], files["troy_study.py"],
-                                        files.get("troy_memory.py")))
+                                        files.get("troy_memory.py"), files.get("troy_drive.py")))
 
     feedback, last_err = "", ""
     for attempt in (1, 2):                      # quick loop: one retry with the test results
@@ -804,7 +867,7 @@ def propose_fix(claude_client, github, problems_text, progress=lambda s: None):
             continue
         progress("Testing the fix with the full checkup…")
         after = offline_checks(new_files["app.py"], new_files["troy_study.py"],
-                               new_files.get("troy_memory.py"))
+                               new_files.get("troy_memory.py"), new_files.get("troy_drive.py"))
         broke = {k: v for k, v in _failures(after).items() if k not in baseline}
         if broke:
             last_err = "the fix broke: " + "; ".join(f"{k} ({v})" for k, v in broke.items())

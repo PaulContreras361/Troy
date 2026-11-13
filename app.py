@@ -22,6 +22,7 @@ from PIL import Image
 import troy_study
 import troy_doctor   # checkup, error log, double-check, self-repair
 import troy_memory   # Troy learns what Paul wants; how hard Troy thinks
+import troy_drive    # Paul's external drive (E:) on the laptop
 
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
@@ -1139,7 +1140,8 @@ def with_today(instructions):
 def troy_system(base=None):
     """Troy's instructions + today's date + what he's learned about Paul."""
     base = TROY_INSTRUCTIONS if base is None else base
-    return with_today(base + troy_memory.for_instructions(st.session_state.get("memory")))
+    return with_today(base + troy_memory.for_instructions(st.session_state.get("memory"))
+                      + troy_drive.system_note(drive_state))
 
 
 def greeting():
@@ -1272,7 +1274,7 @@ for name, start in (
     ("study_on", False), ("study", None), ("study_saved", None),
     ("saved_keys", {}), ("keys_payload", ""), ("keys_rev", ""),
     ("memory", troy_memory.empty()), ("mem_payload", ""), ("mem_rev", ""),
-    ("learn_queue", []),
+    ("learn_queue", []), ("tool_turn", None),
 ):
     if name not in st.session_state:
         st.session_state[name] = start
@@ -1351,6 +1353,15 @@ if "mem_sync_obj" not in st.session_state:
             troy_doctor.log_error("loading Troy's synced memory", e)
 
 
+# ---- Paul's external drive (laptop Troy only) ----
+troy_drive.configure(secret("TROY_DRIVE"))
+drive_state = troy_drive.status()
+if drive_state == "ready":
+    troy_doctor.add_mirror(troy_drive.history_file())   # problems kept for good on E:
+if "drive_allowed" not in st.session_state:
+    st.session_state.drive_allowed = set()   # folders Paul said yes to, this visit only
+
+
 def save_memory(mem):
     """Keep it in this visit, on this device, and in the synced copy."""
     st.session_state.memory = troy_memory.parse(mem)
@@ -1362,6 +1373,7 @@ def save_memory(mem):
     if st.session_state.store_loaded:   # never overwrite the device copy before it's read
         st.session_state.mem_payload = json.dumps(st.session_state.memory)
         st.session_state.mem_rev = uuid4().hex
+    troy_drive.backup_memory(st.session_state.memory)
 
 
 MAX_SAVED_CHATS = 40
@@ -1400,6 +1412,7 @@ def save_current():
     }
     st.session_state.chat_id = cid
     queue_save()
+    troy_drive.save_chat(st.session_state.chats[cid])   # copy on E:\Troy\Chats (laptop)
 
 
 def new_gemini_chat(history=None):
@@ -1648,6 +1661,27 @@ with st.sidebar:
                     st.session_state.confirm_forget_all = False
                     st.rerun()
 
+    # ---- Troy's drive (E:) ----
+    with st.expander(f"Troy's drive ({troy_drive._label()})", key="drive_panel",
+                     icon=":material/hard_drive:"):
+        st.caption(troy_drive.status_line(drive_state))
+        drive_on = st.toggle("Let Troy use the drive", value=True, key="drive_on",
+                             help="Troy keeps his history, chat copies, memory backups and files "
+                             "he makes in his own folder. Anywhere else on the drive he only looks, "
+                             "and asks you first.")
+        if st.session_state.drive_allowed:
+            st.markdown("**Folders you've allowed this visit**")
+            for folder in sorted(st.session_state.drive_allowed):
+                c1, c2 = st.columns([7, 1], vertical_alignment="center")
+                c1.caption(folder)
+                if c2.button("", key=f"revoke_{folder}", icon=":material/close:",
+                             type="tertiary", help="Take back permission"):
+                    st.session_state.drive_allowed.discard(folder)
+                    st.rerun()
+        if drive_state == "ready" and st.button("Open Troy's folder", key="open_drive",
+                                                icon=":material/folder_open:"):
+            troy_drive.open_troy_folder()
+
     # Troy's health: filled in further down, once the AI clients are ready.
     health_box = st.container(key="health_box")
     # Catches errors on the phone side (and two voices at once) for the error log.
@@ -1844,6 +1878,8 @@ def render_health():
             st.rerun()
 
         st.markdown("**Problems Troy noticed**")
+        if drive_state == "ready":
+            st.caption(f"Full history kept for good on {troy_drive.history_file()}")
         if not log:
             st.caption("None so far.")
         for e in log[:8]:
@@ -2014,6 +2050,25 @@ for msg in ([] if st.session_state.study_on else st.session_state.messages):
                 if msg.get("voice_note"):
                     st.caption(msg["voice_note"])
                 speak_reply(msg["text"], autoplay=autoplay)
+
+# ---- Troy is asking to look on the drive: Allow / Deny (like Claude does) ----
+_turn = st.session_state.get("tool_turn")
+if _turn and _turn.get("ask") and not st.session_state.study_on:
+    _ask = _turn["ask"]
+    with st.chat_message("assistant"):
+        st.markdown(f"🔐 **Can I {_ask['say']}?**")
+        st.caption("I only look — I never change, move or delete anything outside my own "
+                   "Troy folder.")
+        _row = st.container(horizontal=True, key="perm_row", gap="small")
+        _once = _row.button("Allow once", key="perm_once", type="primary")
+        _folder = _row.button("Allow this folder", key="perm_folder")
+        _deny = _row.button("Deny", key="perm_deny")
+        if not _ask.get("spoken"):
+            _ask["spoken"] = True
+            speak_reply(f"Can I {_ask['say']}?", autoplay=auto_speak)
+    if _once or _folder or _deny:
+        # Handled further down, once Troy's answer code has been loaded.
+        st.session_state.perm_choice = "once" if _once else "folder" if _folder else "deny"
 
 if not st.session_state.study_on and st.session_state.get("last_pdf"):
     _pdf_name = st.session_state.last_pdf["name"]
@@ -2351,21 +2406,106 @@ def think_kwargs(text, has_files, max_tokens=CLAUDE_MAX_REPLY_TOKENS):
 
 
 def ask_claude(files, text):
+    """Ask Claude. Returns the answer, or None when Troy is waiting for Paul's OK
+    to look somewhere on the drive (the Allow / Deny card)."""
     st.session_state.claude_history.append(
         {"role": "user", "content": claude_blocks(files, text)}
     )
+    st.session_state.tool_turn = {"kw": think_kwargs(text, bool(files)), "extra": [],
+                                  "files": files, "text": text}
     try:
-        response = claude_create(
-            **think_kwargs(text, bool(files)),
-            system=troy_system(),
-            messages=claude_messages(),
-        )
+        return run_claude_turn()
     except Exception:
         st.session_state.claude_history.pop()  # keep history in user/assistant order
+        st.session_state.tool_turn = None
         raise
-    answer = "".join(b.text for b in response.content if getattr(b, "type", "") == "text")
-    st.session_state.claude_history.append({"role": "assistant", "content": answer or "(no reply)"})
-    return answer
+
+
+def run_claude_turn():
+    """Talk to Claude, running drive tools as he asks for them, until he answers.
+    Pauses (returns None) when a tool needs Paul's permission."""
+    turn = st.session_state.tool_turn
+    use_tools = drive_on and drive_state == "ready"
+    for _ in range(12):
+        kw = dict(turn["kw"])
+        if use_tools:
+            kw["tools"] = troy_drive.TOOLS
+        response = claude_create(**kw, system=troy_system(),
+                                 messages=claude_messages() + turn["extra"])
+        if getattr(response, "stop_reason", None) != "tool_use":
+            answer = "".join(b.text for b in response.content if getattr(b, "type", "") == "text")
+            st.session_state.claude_history.append(
+                {"role": "assistant", "content": answer or "(no reply)"})
+            st.session_state.tool_turn = None
+            return answer
+        turn["extra"].append({"role": "assistant",
+                              "content": [b.model_dump(exclude_none=True) for b in response.content]})
+        turn["calls"] = [{"id": b.id, "name": b.name, "input": dict(b.input or {})}
+                         for b in response.content if getattr(b, "type", "") == "tool_use"]
+        turn["results"] = []
+        if not settle_tool_calls(turn):
+            return None                      # waiting for Allow / Deny
+        turn["extra"].append({"role": "user", "content": turn["results"]})
+    raise RuntimeError("Troy took too many steps on the drive for one answer")
+
+
+def settle_tool_calls(turn):
+    """Run every tool call that doesn't need permission. Stop at the first that does."""
+    done = {r["tool_use_id"] for r in turn["results"]}
+    for call in turn["calls"]:
+        if call["id"] in done:
+            continue
+        if call["name"] != "drive_save":
+            real, why = troy_drive.resolve(troy_drive.tool_target(call["name"], call["input"]))
+            if why:
+                turn["results"].append({"type": "tool_result", "tool_use_id": call["id"],
+                                        "content": "Not allowed: " + why, "is_error": True})
+                continue
+            if troy_drive.needs_permission(real, st.session_state.drive_allowed):
+                turn["ask"] = {**call, "real": str(real),
+                               "folder": str(troy_drive.folder_for_permission(real)),
+                               "say": troy_drive.describe(call["name"], call["input"], real)}
+                return False
+        turn["results"].append({"type": "tool_result", "tool_use_id": call["id"],
+                                "content": troy_drive.run(call["name"], call["input"])})
+    turn.pop("ask", None)
+    return True
+
+
+def answer_permission(choice):
+    """Paul tapped Allow once / Allow this folder / Deny on Troy's request."""
+    turn = st.session_state.tool_turn
+    ask = turn.pop("ask")
+    if choice == "deny":
+        result = ("Paul said no to that. Don't try it again unless he asks; answer with what "
+                  "you have, or ask him which folder to look in.")
+    else:
+        if choice == "folder":
+            st.session_state.drive_allowed.add(ask["folder"])
+        result = troy_drive.run(ask["name"], ask["input"])
+    turn["results"].append({"type": "tool_result", "tool_use_id": ask["id"], "content": result})
+    try:
+        if not settle_tool_calls(turn):
+            return                                   # another request: show the next card
+        turn["extra"].append({"role": "user", "content": turn["results"]})
+        with st.spinner("Troy is working on it..."):
+            answer = run_claude_turn()
+        if answer is None:
+            return
+        finish_reply(answer, True, turn["files"], turn["text"])
+    except Exception as e:
+        st.session_state.claude_history.pop()
+        st.session_state.tool_turn = None
+        finish_reply(explain_error(e), False, [], "")
+
+
+def abandon_tool_turn():
+    """Paul sent a new message while Troy was waiting for his OK."""
+    if st.session_state.get("tool_turn"):
+        st.session_state.claude_history.append(
+            {"role": "assistant", "content": "(I was waiting for your OK to look on your drive; "
+                                              "you moved on, so I didn't.)"})
+        st.session_state.tool_turn = None
 
 
 def transcribe(audio_bytes, mime):
@@ -2409,6 +2549,7 @@ def send_to_troy(user_text, files, text, audio=None):
     for f in files:
         if f["mime"] == "application/pdf":
             st.session_state.last_pdf = {"name": f["name"], "data": f["data"]}
+    abandon_tool_turn()
     st.session_state.messages.append({"role": "user", "text": user_text})
     st.session_state.hide_keyboard = True
     st.session_state.last_think = None
@@ -2417,6 +2558,9 @@ def send_to_troy(user_text, files, text, audio=None):
             _, _think, _ = troy_memory.thinking_plan(think_mode, text, bool(files))
             with st.spinner("Troy is thinking it through..." if _think else "Troy is answering..."):
                 answer = ask_claude(files, text)
+            if answer is None:          # waiting for Paul's OK on the drive
+                save_current()
+                return
         else:
             message = gemini_parts(files) + ([audio] if audio else []) + [text]
             response = st.session_state.chat.send_message(
@@ -2429,6 +2573,11 @@ def send_to_troy(user_text, files, text, audio=None):
     except Exception as e:
         answer = explain_error(e)
         ok = False
+    finish_reply(answer, ok, files, text)
+
+
+def finish_reply(answer, ok, files, text):
+    """Double-check, learn, and put Troy's reply on screen."""
     # QA/QC: answers about files get checked against the file before Paul sees them.
     if ok and files and brain == "claude" and double_check_on:
         with st.spinner("Troy is double-checking against your file..."):
@@ -2947,6 +3096,13 @@ def ask_study_question(question):
 
 if st.session_state.study_on:
     render_study()
+
+# ---- Paul answered Troy's drive request (Allow once / Allow this folder / Deny) ----
+if st.session_state.get("perm_choice"):
+    _choice = st.session_state.pop("perm_choice")
+    if st.session_state.get("tool_turn") and st.session_state.tool_turn.get("ask"):
+        answer_permission(_choice)
+    st.rerun()
 
 # ---- Talk mode: Paul spoke and paused, so the recording came in by itself ----
 talk_said = None

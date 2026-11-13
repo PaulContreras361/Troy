@@ -124,3 +124,7 @@ TROY_MEMORY_REPO = "PaulContreras361/troy-memory"
 
   Troy refuses to keep memory in a public repo.
 - **How Troy thinks** (Settings): **Troy decides** (quick model for small talk, the smarter model thinking it through for files, plans, code, EPR work), **Always deep thinker**, or **Fast, but thinks**. Each reply shows 🧠 which was used.
+
+## Troy's drive (troy_drive.py) — laptop Troy only
+
+Paul's external drive (**E:**) is free storage for the laptop Troy. Troy keeps his own things in `E:\Troy` without asking: `History\problems.jsonl` (every problem, kept for good), `Chats\` (a copy of every chat), `Memory\` (daily memory backups) and `Files\` (files he makes — never overwritten). Anywhere else on E: he can list, find and read files, but he asks first — **Allow once / Allow this folder / Deny** — and he never writes, moves or deletes outside `E:\Troy` or touches other drives. Unplugged: he says so and keeps working. The phone/cloud Troy can't reach the drive and says to use the laptop. Different letter? Add `TROY_DRIVE = "F:"` to Secrets.
