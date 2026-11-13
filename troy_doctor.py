@@ -45,7 +45,7 @@ MAX_LOG = 200
 
 # Files the repair job may change. Not this file: the doctor stays fixed so a bad
 # repair can never break the Approve / Undo buttons.
-REPAIRABLE = ["app.py", "troy_study.py", "requirements.txt"]
+REPAIRABLE = ["app.py", "troy_study.py", "troy_memory.py", "requirements.txt"]
 REPAIR_MODEL = "claude-sonnet-5-5"
 FIX_BRANCH_PREFIX = "troy-fix-"
 
@@ -382,13 +382,18 @@ def _check(results, name, fn):
     results.append({"name": name, "ok": bool(ok), "note": note})
 
 
-def offline_checks(app_src=None, study_src=None):
+def offline_checks(app_src=None, study_src=None, memory_src=None):
     """Everything that can be tested without the internet. Takes source text so
     a proposed repair can be tested before it ever goes live."""
     if app_src is None:
         app_src = (HERE / "app.py").read_text(encoding="utf-8")
     if study_src is None:
         study_src = (HERE / "troy_study.py").read_text(encoding="utf-8")
+    if memory_src is None:
+        try:
+            memory_src = (HERE / "troy_memory.py").read_text(encoding="utf-8")
+        except OSError:
+            memory_src = ""
     results = []
 
     def compiles(src, fname):
@@ -533,13 +538,43 @@ def offline_checks(app_src=None, study_src=None):
         pics = list(mod.page_images(samples["sample.pdf"]))
         return (len(pics) >= 1, f"{len(pics)} page picture(s) made for scanned PDFs")
     _check(results, "Study a PDF: page pictures (scanned PDFs)", t_pictures)
+
+    def t_memory():
+        mod = types.ModuleType("troy_memory_under_test")
+        exec(compile(memory_src, "troy_memory.py", "exec"), mod.__dict__)
+        m, ch = mod.add_fact(mod.empty(), "Prefers step-by-step instructions", "preference")
+        m, ch2 = mod.add_fact(m, "Works on EPR permits", "project")
+        m, ch3 = mod.add_fact(m, "Prefers step-by-step instructions", "preference")   # duplicate
+        m, ch4 = mod.add_fact(m, "my key is sk-ant-abc123secret", "about")              # secret
+        block = mod.for_instructions(m)
+        fid = m["facts"][0]["id"]
+        gone, _ = mod.remove_fact(m, fid)
+        newer = mod.merge(m, gone)          # the newer copy (the deletion) must win
+        good = (ch and ch2 and not ch3 and not ch4 and len(m["facts"]) == 2
+                and "step-by-step" in block and len(newer["facts"]) == 1)
+        return (good, "learns, skips duplicates and secrets, forgetting sticks" if good
+                else f"memory misbehaved: {len(m['facts'])} facts, dup={ch3}, secret={ch4}")
+    _check(results, "Memory: learn, forget, never store secrets", t_memory)
+
+    def t_think():
+        mod = types.ModuleType("troy_think_under_test")
+        exec(compile(memory_src, "troy_memory.py", "exec"), mod.__dict__)
+        quick = mod.thinking_plan("auto", "hey Troy, good morning", False)
+        work = mod.thinking_plan("auto", "Check my EPR tracker and tell me what moves", False)
+        files = mod.thinking_plan("auto", "thanks", True)
+        deep = mod.thinking_plan("deep", "hi", False)
+        good = (not quick[1] and work[1] and files[1] and deep[1]
+                and work[0] == deep[0] != quick[0])
+        return (good, f"small talk → {quick[2]}; real work → {work[2]}" if good
+                else "Troy decides is routing questions to the wrong model")
+    _check(results, "How Troy thinks: picks quick vs deep", t_think)
     return results
 
 
 def startup_signature():
     """Changes whenever Troy's code changes, so the startup check re-runs."""
     sig = []
-    for f in ("app.py", "troy_study.py", "troy_doctor.py", "requirements.txt"):
+    for f in ("app.py", "troy_study.py", "troy_memory.py", "troy_doctor.py", "requirements.txt"):
         try:
             s = (HERE / f).stat()
             sig.append(f"{f}:{s.st_size}:{int(s.st_mtime)}")
@@ -554,10 +589,11 @@ def online_checks(claude_client=None, claude_model=None, gemini_client=None,
     results = []
 
     if claude_client is not None:
-        def t_claude():
-            m = claude_client.models.retrieve(claude_model)
-            return True, f"key works; {getattr(m, 'display_name', claude_model)} is available"
-        _check(results, "Claude key and Troy's brain model", t_claude)
+        for model in ([claude_model] if isinstance(claude_model, str) else list(claude_model)):
+            def t_claude(model=model):
+                m = claude_client.models.retrieve(model)
+                return True, f"key works; {getattr(m, 'display_name', model)} is available"
+            _check(results, f"Claude key and model {model}", t_claude)
     else:
         results.append({"name": "Claude key", "ok": False, "note": "no Claude key found"})
 
@@ -710,7 +746,9 @@ Rules for edits: "find" must be copied EXACTLY from the file (spaces and line br
 included) and must appear exactly once in that file — include a few surrounding lines to
 make it unique. If a problem is outside Troy's code (a key ran out of credit, Google
 retired a model you can't replace safely, the phone's own settings), set can_fix false
-and explain what Paul should do in the summary."""
+and explain what Paul should do in the summary.
+The summary is posted on a PUBLIC GitHub page: describe the code change only. Never include
+file names Paul uploaded, anything he typed, names of people, or other personal details."""
 
 
 def _apply_edits(files, edits):
@@ -738,7 +776,8 @@ def propose_fix(claude_client, github, problems_text, progress=lambda s: None):
     files, shas = {}, {}
     for f in REPAIRABLE:
         files[f], shas[f] = github.get_file(f)
-    baseline = _failures(offline_checks(files["app.py"], files["troy_study.py"]))
+    baseline = _failures(offline_checks(files["app.py"], files["troy_study.py"],
+                                        files.get("troy_memory.py")))
 
     feedback, last_err = "", ""
     for attempt in (1, 2):                      # quick loop: one retry with the test results
@@ -764,7 +803,8 @@ def propose_fix(claude_client, github, problems_text, progress=lambda s: None):
             feedback = f"Your last attempt could not be applied: {e}. Copy 'find' text exactly.\n\n"
             continue
         progress("Testing the fix with the full checkup…")
-        after = offline_checks(new_files["app.py"], new_files["troy_study.py"])
+        after = offline_checks(new_files["app.py"], new_files["troy_study.py"],
+                               new_files.get("troy_memory.py"))
         broke = {k: v for k, v in _failures(after).items() if k not in baseline}
         if broke:
             last_err = "the fix broke: " + "; ".join(f"{k} ({v})" for k, v in broke.items())
@@ -781,7 +821,9 @@ def propose_fix(claude_client, github, problems_text, progress=lambda s: None):
         for f in changed:
             github.put_file(f, new_files[f], f"Troy self-repair: {f}", branch, shas[f])
         passed = sum(1 for r in after if r["ok"])
-        body = (plan["summary"] + "\n\n**Problems Troy recorded:**\n" + problems_text[:3000]
+        # The repo is public: the proposal shows the code change and test results only —
+        # never Troy's raw problem list (it can hold file names and what Paul typed).
+        body = (plan["summary"]
                 + f"\n\n**Checkup on this fix:** {passed} of {len(after)} checks passed"
                 + (("; newly passing: " + ", ".join(fixed_checks)) if fixed_checks else "")
                 + "\n\nApprove or reject this from Troy → Troy's health.")

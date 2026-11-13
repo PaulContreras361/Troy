@@ -21,6 +21,7 @@ from PIL import Image
 
 import troy_study
 import troy_doctor   # checkup, error log, double-check, self-repair
+import troy_memory   # Troy learns what Paul wants; how hard Troy thinks
 
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
@@ -1135,6 +1136,12 @@ def with_today(instructions):
             f"{now:%I:%M %p} Central time (Point Comfort, Texas).\n")
 
 
+def troy_system(base=None):
+    """Troy's instructions + today's date + what he's learned about Paul."""
+    base = TROY_INSTRUCTIONS if base is None else base
+    return with_today(base + troy_memory.for_instructions(st.session_state.get("memory")))
+
+
 def greeting():
     try:
         now = datetime.now(ZoneInfo("America/Chicago"))
@@ -1264,6 +1271,8 @@ for name, start in (
     ("store_loaded", False), ("save_payload", ""), ("save_rev", ""),
     ("study_on", False), ("study", None), ("study_saved", None),
     ("saved_keys", {}), ("keys_payload", ""), ("keys_rev", ""),
+    ("memory", troy_memory.empty()), ("mem_payload", ""), ("mem_rev", ""),
+    ("learn_queue", []),
 ):
     if name not in st.session_state:
         st.session_state[name] = start
@@ -1277,6 +1286,7 @@ export default function(component) {
   const { data, setTriggerValue } = component;
   const KEY = "troy_chats_v1";
   const KEYS = "troy_keys_v1";   // API keys Paul chose to remember on this phone
+  const MEM = "troy_memory_v1";  // what Troy has learned about Paul (this device's copy)
   if (!data) return;
   if (data.save_rev && window.__troySavedRev !== data.save_rev) {
     try { localStorage.setItem(KEY, data.save); window.__troySavedRev = data.save_rev; } catch (e) {}
@@ -1284,11 +1294,16 @@ export default function(component) {
   if (data.keys_rev && window.__troyKeysRev !== data.keys_rev) {
     try { localStorage.setItem(KEYS, data.keys); window.__troyKeysRev = data.keys_rev; } catch (e) {}
   }
+  if (data.mem_rev && window.__troyMemRev !== data.mem_rev) {
+    try { localStorage.setItem(MEM, data.mem); window.__troyMemRev = data.mem_rev; } catch (e) {}
+  }
   if (data.load_token && window.__troyLoadToken !== data.load_token) {
     window.__troyLoadToken = data.load_token;
-    let raw = null, keys = null;
-    try { raw = localStorage.getItem(KEY); keys = localStorage.getItem(KEYS); } catch (e) {}
-    setTriggerValue("loaded", JSON.stringify({ store: raw || "{}", keys: keys || "{}" }));
+    let raw = null, keys = null, mem = null;
+    try { raw = localStorage.getItem(KEY); keys = localStorage.getItem(KEYS);
+          mem = localStorage.getItem(MEM); } catch (e) {}
+    setTriggerValue("loaded", JSON.stringify({ store: raw || "{}", keys: keys || "{}",
+                                               memory: mem || "{}" }));
   }
 }
 """
@@ -1320,6 +1335,33 @@ def secret(name):
         return st.secrets[name]
     except Exception:
         return os.environ.get(name, "")
+
+
+# ---- Troy's memory: this device's copy + (when set up) the private synced copy ----
+if "mem_sync_obj" not in st.session_state:
+    st.session_state.mem_sync_obj = troy_memory.sync_from(secret)
+    st.session_state.mem_sync_ok = False
+    if st.session_state.mem_sync_obj:
+        try:
+            st.session_state.memory = troy_memory.merge(
+                st.session_state.memory, st.session_state.mem_sync_obj.load())
+            st.session_state.mem_sync_ok = True
+        except Exception as e:
+            st.session_state.mem_sync_err = str(e)[:200]
+            troy_doctor.log_error("loading Troy's synced memory", e)
+
+
+def save_memory(mem):
+    """Keep it in this visit, on this device, and in the synced copy."""
+    st.session_state.memory = troy_memory.parse(mem)
+    if st.session_state.mem_sync_obj and st.session_state.mem_sync_ok:
+        try:
+            st.session_state.memory = st.session_state.mem_sync_obj.save(st.session_state.memory)
+        except Exception as e:
+            troy_doctor.log_error("saving Troy's synced memory", e)
+    if st.session_state.store_loaded:   # never overwrite the device copy before it's read
+        st.session_state.mem_payload = json.dumps(st.session_state.memory)
+        st.session_state.mem_rev = uuid4().hex
 
 
 MAX_SAVED_CHATS = 40
@@ -1372,7 +1414,7 @@ def new_gemini_chat(history=None):
     ]
     st.session_state.chat = st.session_state.client.chats.create(
         model="gemini-2.5-flash",
-        config=genai.types.GenerateContentConfig(system_instruction=with_today(TROY_INSTRUCTIONS)),
+        config=genai.types.GenerateContentConfig(system_instruction=troy_system()),
         history=contents or None,
     )
 
@@ -1413,6 +1455,8 @@ with st.sidebar:
             "save_rev": st.session_state.save_rev,
             "keys": st.session_state.keys_payload,
             "keys_rev": st.session_state.keys_rev,
+            "mem": st.session_state.mem_payload,
+            "mem_rev": st.session_state.mem_rev,
         },
         key="troy_store",
         on_loaded_change=lambda: None,
@@ -1423,7 +1467,12 @@ with st.sidebar:
             saved = json.loads(store.loaded) or {}
         except Exception:
             saved = {}
-        if isinstance(saved, dict) and set(saved) == {"store", "keys"}:
+        if isinstance(saved, dict) and {"store", "keys"} <= set(saved):
+            # This device's copy of Troy's memory; the newer copy wins.
+            st.session_state.memory = troy_memory.merge(
+                st.session_state.memory, saved.get("memory") or "{}")
+            st.session_state.mem_payload = json.dumps(st.session_state.memory)
+            st.session_state.mem_rev = uuid4().hex
             try:
                 keys = json.loads(saved["keys"]) or {}
                 st.session_state.saved_keys = {
@@ -1514,9 +1563,16 @@ with st.sidebar:
                 st.session_state.keys_rev = uuid4().hex
                 st.rerun()
         brain = "claude" if claude_key else ("gemini" if api_key else None)
-        claude_model = CLAUDE_MODELS[
-            st.selectbox("Troy's brain", list(CLAUDE_MODELS), disabled=brain != "claude")
-        ]
+        think_label = st.selectbox(
+            "How Troy thinks", list(troy_memory.THINK_MODES), key="think_mode",
+            disabled=brain != "claude",
+            help="Troy decides: quick answers for small talk, the smarter model thinking it "
+            "through for real work (files, plans, code, EPR). Always deep thinker: the smarter "
+            "model thinks on every message (best, slowest, most credit). Fast, but thinks: the "
+            "cheap model, thinking first.")
+        think_mode = troy_memory.THINK_MODES[think_label]
+        # The model used for checks and double-checks when no message picks one.
+        claude_model = troy_memory.SMART_MODEL if think_mode == "deep" else troy_memory.FAST_MODEL
         if brain == "claude":
             st.caption("AI brain: Claude — no daily limit (uses your Console credits)")
         elif brain == "gemini":
@@ -1530,6 +1586,67 @@ with st.sidebar:
             "(numbers, names, dates, rows) against the file and fixes them. Uses a little "
             "more Claude credit, only when a file is attached.")
         st.caption("Chats are saved on this device only.")
+
+    # ---- What Troy remembers (he learns from chats; Paul can see and change it) ----
+    _mem = troy_memory.parse(st.session_state.memory)
+    with st.expander(f"What Troy remembers ({len(_mem['facts'])})", key="memory_panel",
+                     icon=":material/psychology:"):
+        learn_on = st.toggle("Learn from our chats", value=True, key="learn_on",
+                             help="After each chat, Troy keeps what you told him that's worth "
+                             "knowing next time: how you like things done, your projects, "
+                             "facts about you. Only what you said — never guesses.")
+        if st.session_state.mem_sync_obj and st.session_state.mem_sync_ok:
+            st.caption("🔄 Synced across your devices (private memory repo).")
+        elif st.session_state.mem_sync_obj:
+            st.caption("⚠️ Sync isn't working: " + st.session_state.get("mem_sync_err", "")
+                       + " — keeping memory on this device for now.")
+        else:
+            st.caption("Kept on this device. Add TROY_MEMORY_REPO to sync phone + laptop.")
+        if not _mem["facts"]:
+            st.caption("Nothing yet — Troy learns as you talk.")
+        for _kind, _label in troy_memory.KINDS.items():
+            _rows = [f for f in _mem["facts"] if f.get("kind") == _kind]
+            if not _rows:
+                continue
+            st.markdown(f"**{_label}**")
+            for f in _rows:
+                c1, c2 = st.columns([7, 1], vertical_alignment="center")
+                c1.markdown(f["text"])
+                if c2.button("", key=f"forget_{f['id']}", icon=":material/close:",
+                             type="tertiary", help="Forget this"):
+                    save_memory(troy_memory.remove_fact(st.session_state.memory, f["id"])[0])
+                    st.rerun()
+
+        def _remember_typed():
+            text = st.session_state.get("mem_new", "").strip()
+            kind = {"About me": "about", "How I like things": "preference",
+                    "A project": "project"}.get(st.session_state.get("mem_kind"), "about")
+            if text:
+                save_memory(troy_memory.add_fact(st.session_state.memory, text, kind)[0])
+            st.session_state.mem_new = ""
+
+        st.text_input("Tell Troy something to remember", key="mem_new",
+                      placeholder="e.g. Always give me steps one at a time")
+        st.segmented_control("Kind", ["About me", "How I like things", "A project"],
+                             default="How I like things", key="mem_kind",
+                             label_visibility="collapsed")
+        st.button("Remember this", key="mem_add", icon=":material/add:", on_click=_remember_typed)
+        if _mem["facts"]:
+            if not st.session_state.get("confirm_forget_all"):
+                if st.button("Forget everything", key="forget_all", type="tertiary",
+                             icon=":material/delete_forever:"):
+                    st.session_state.confirm_forget_all = True
+                    st.rerun()
+            else:
+                st.warning("Erase everything Troy has learned about you?")
+                fy, fn = st.columns(2)
+                if fy.button("Erase", key="forget_all_yes", type="primary", width="stretch"):
+                    save_memory(troy_memory.forget_all())
+                    st.session_state.confirm_forget_all = False
+                    st.rerun()
+                if fn.button("Cancel", key="forget_all_no", width="stretch"):
+                    st.session_state.confirm_forget_all = False
+                    st.rerun()
 
     # Troy's health: filled in further down, once the AI clients are ready.
     health_box = st.container(key="health_box")
@@ -1712,7 +1829,7 @@ def render_health():
                 tts = st.session_state.get("tts_client") or st.session_state.get("client")
                 res += troy_doctor.online_checks(
                     claude_client=st.session_state.get("claude") if claude_key else None,
-                    claude_model=claude_model,
+                    claude_model=[troy_memory.FAST_MODEL, troy_memory.SMART_MODEL],
                     gemini_client=st.session_state.get("client") if api_key else None,
                     tts_models=TTS_MODELS,
                     voice_test=(lambda: human_voice(tts, "Checkup.", TTS_VOICES[voice_label]))
@@ -1876,10 +1993,15 @@ def make_voice(msg):
             )
 
 
+for _note in st.session_state.pop("memory_notes", []):
+    st.toast(_note, icon=":material/psychology:")
+
 # ---- Show the conversation so far (Study mode draws its own screen later) ----
 for msg in ([] if st.session_state.study_on else st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.write(msg["text"])
+        if msg.get("how"):
+            st.caption("🧠 " + msg["how"])
         if msg["role"] == "assistant":
             autoplay = msg.pop("autoplay", False) and auto_speak
             if msg.pop("pending_voice", False):
@@ -2194,7 +2316,14 @@ def claude_create(**kw):
             time.sleep(2 + 2 * attempt)
         except anthropic.APIStatusError as e:
             code = getattr(e, "status_code", 0)
-            if code == 404 and "model" in str(e).lower():
+            if code == 400 and "thinking" in kw and re.search(
+                    r"thinking|adaptive|effort|output_config", str(e), re.I):
+                # This model doesn't take the thinking setting: answer without it.
+                troy_doctor.log_error(f"{kw['model']} refused the thinking setting — answered "
+                                      "without thinking", e)
+                kw.pop("thinking", None)
+                kw.pop("output_config", None)
+            elif code == 404 and "model" in str(e).lower():
                 tried.add(kw["model"])
                 other = [m for m in CLAUDE_MODELS.values() if m not in tried]
                 troy_doctor.log_error(f"Claude model {kw['model']} not found — switched to "
@@ -2209,15 +2338,26 @@ def claude_create(**kw):
     raise RuntimeError("Claude didn't answer after several tries")
 
 
+def think_kwargs(text, has_files, max_tokens=CLAUDE_MAX_REPLY_TOKENS):
+    """Which model, and whether Troy thinks before answering (Settings → How Troy thinks)."""
+    model, think, label = troy_memory.thinking_plan(think_mode, text, has_files)
+    st.session_state.last_think = (model, label)
+    kw = {"model": model, "max_tokens": max_tokens}
+    if think:
+        kw["max_tokens"] = max(max_tokens, 16_000)   # room to think, then answer
+        kw["thinking"] = {"type": "adaptive"}
+        kw["output_config"] = {"effort": "high"}
+    return kw
+
+
 def ask_claude(files, text):
     st.session_state.claude_history.append(
         {"role": "user", "content": claude_blocks(files, text)}
     )
     try:
         response = claude_create(
-            model=claude_model,
-            max_tokens=CLAUDE_MAX_REPLY_TOKENS,
-            system=with_today(TROY_INSTRUCTIONS),
+            **think_kwargs(text, bool(files)),
+            system=troy_system(),
             messages=claude_messages(),
         )
     except Exception:
@@ -2271,9 +2411,12 @@ def send_to_troy(user_text, files, text, audio=None):
             st.session_state.last_pdf = {"name": f["name"], "data": f["data"]}
     st.session_state.messages.append({"role": "user", "text": user_text})
     st.session_state.hide_keyboard = True
+    st.session_state.last_think = None
     try:
         if brain == "claude":
-            answer = ask_claude(files, text)
+            _, _think, _ = troy_memory.thinking_plan(think_mode, text, bool(files))
+            with st.spinner("Troy is thinking it through..." if _think else "Troy is answering..."):
+                answer = ask_claude(files, text)
         else:
             message = gemini_parts(files) + ([audio] if audio else []) + [text]
             response = st.session_state.chat.send_message(
@@ -2290,11 +2433,18 @@ def send_to_troy(user_text, files, text, audio=None):
     if ok and files and brain == "claude" and double_check_on:
         with st.spinner("Troy is double-checking against your file..."):
             checked, footer = troy_doctor.double_check(
-                st.session_state.claude, claude_model, claude_blocks(files, "")[:-1], text, answer)
+                st.session_state.claude,
+                (st.session_state.get("last_think") or (claude_model,))[0],
+                claude_blocks(files, "")[:-1], text, answer)
         if checked != answer and st.session_state.claude_history:
             st.session_state.claude_history[-1]["content"] = checked   # Troy remembers the fixed one
         answer = checked + (("\n\n" + footer) if footer else "")
+    if ok and brain == "claude" and learn_on:
+        # Learn from this turn after the reply is on screen (end of the script).
+        st.session_state.learn_queue = [(text, answer)]
     reply = {"role": "assistant", "text": answer, "autoplay": auto_speak}
+    if ok and st.session_state.get("last_think"):
+        reply["how"] = st.session_state.last_think[1]
     if (ok and auto_speak and use_human_voice and api_key
             and not st.session_state.get("tts_off_today")):
         # Show the text now; the voice is made right after it appears.
@@ -2340,13 +2490,13 @@ def ask_brain_once(task, section, max_tokens=1200):
     content = f"Document: {st.session_state.study['name']}\n\nSECTION:\n{section}\n\nTASK:\n{task}"
     if brain == "claude":
         r = claude_create(
-            model=claude_model, max_tokens=max_tokens, system=with_today(STUDY_SYSTEM),
+            **think_kwargs(task, False, max_tokens), system=troy_system(STUDY_SYSTEM),
             messages=[{"role": "user", "content": content}],
         )
         return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
     r = st.session_state.client.models.generate_content(
         model="gemini-2.5-flash", contents=content,
-        config=genai.types.GenerateContentConfig(system_instruction=with_today(STUDY_SYSTEM)),
+        config=genai.types.GenerateContentConfig(system_instruction=troy_system(STUDY_SYSTEM)),
     )
     return (r.text or "").strip()
 
@@ -2887,3 +3037,19 @@ elif prompt or send_voice or ask_about_files:
         text = prompt or "Please read the attached file(s) and help me understand them."
         send_to_troy(text + file_label(attached), parts, text)
         st.rerun()
+
+
+# ---- Learning: after the reply is on screen, Troy keeps what's worth remembering ----
+if st.session_state.learn_queue:
+    _paul, _troy = st.session_state.learn_queue.pop(0)
+    st.session_state.learn_queue = []
+    if brain == "claude" and learn_on:
+        try:
+            _mem, _notes = troy_memory.learn(st.session_state.claude, st.session_state.memory,
+                                             _paul, _troy)
+            if _notes:
+                save_memory(_mem)
+                st.session_state.memory_notes = _notes[:3]
+                st.rerun()   # shows the "Learned: …" note and saves it on this device
+        except Exception as e:
+            troy_doctor.log_error("learning from the chat", e)

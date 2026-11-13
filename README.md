@@ -112,3 +112,15 @@ Self-repair needs a GitHub key in Streamlit Secrets:
 ```toml
 GITHUB_TOKEN = "github_pat_..."   # fine-grained, Troy repo only: Contents + Pull requests = Read and write
 ```
+
+## Troy learns and thinks (troy_memory.py)
+
+- **What Troy remembers** (☰) — after each chat, a quick pass keeps what you *said* that's worth knowing next time: how you like things done, facts about you, your projects. "Remember …" and "forget …" work. Every memory is listed with an ✕ to delete it; you can type one in; **Forget everything** erases it. Never stores keys, ID/account numbers, health, money amounts or similar. Switch **Learn from our chats** off any time.
+- Memory is kept on each device. To share one memory between phone and laptop, create a **private** repo (e.g. `PaulContreras361/troy-memory`), include it in the GitHub key (Contents: Read and write), and add to Secrets:
+
+```toml
+TROY_MEMORY_REPO = "PaulContreras361/troy-memory"
+```
+
+  Troy refuses to keep memory in a public repo.
+- **How Troy thinks** (Settings): **Troy decides** (quick model for small talk, the smarter model thinking it through for files, plans, code, EPR work), **Always deep thinker**, or **Fast, but thinks**. Each reply shows 🧠 which was used.
