@@ -231,7 +231,13 @@ SPEAKER_JS = """
   session("playback");
   ["pointerdown", "touchstart", "mousedown"].forEach(ev => document.addEventListener(ev, (e) => {
     const t = e.target;
-    if (t && t.closest && t.closest('[data-testid="stChatInputMicButton"]')) session("play-and-record");
+    if (!t || !t.closest) return;
+    // Mic or send pressed = Paul wants the floor: Troy stops talking right away,
+    // whichever voice he's using (human voice or phone voice).
+    const mic = t.closest('[data-testid="stChatInputMicButton"]');
+    const send = t.closest('[data-testid="stChatInputSubmitButton"]');
+    if ((mic || send) && window.troyAudio) window.troyAudio.stop();
+    if (mic) session("play-and-record");
   }, { capture: true }));
   window.troySession = session;
   const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
@@ -344,6 +350,9 @@ SPEAKER_JS = """
   A.gen = 0;
   A.sayAll = (utterances) => {
     if (!window.speechSynthesis) return;
+    // Safety net: the phone voice never talks over the human voice.
+    try { A.el.pause(); } catch (e) {}
+    try { if (A.eq) A.eq.el.pause(); } catch (e) {}
     if (window.troySession) window.troySession("playback");
     const pause = A.cfg().pause * 1000, gen = A.gen;
     if (!pause) { utterances.forEach(u => speechSynthesis.speak(u)); return; }
@@ -772,13 +781,14 @@ def speak_reply(text, autoplay=False):
                     readButton.textContent = "Speech is not supported in this browser";
                     return;
                 }}
-                window.speechSynthesis.cancel();
+                // Silence BOTH voices first (the human-voice player too),
+                // so two voices never talk over each other.
+                const A = window.troyAudio;
+                if (A) A.stop(); else window.speechSynthesis.cancel();
                 const text = container.querySelector(".speech-text").textContent;
                 // Chrome stops long utterances after ~15 s, so speak in
                 // sentence-sized pieces that queue one after another.
                 const pieces = text.match(/[^.!?\\n]+[.!?]*\\s*/g) || [text];
-                const A = window.troyAudio;
-                if (A) A.gen++;
                 const voice = bestVoice();
                 const list = [];
                 for (const piece of pieces) {{
