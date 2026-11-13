@@ -292,7 +292,14 @@ def _read(real):
             return (f"{real.name} has {len(pages)} pages but no readable text (probably scanned). "
                     "Paul can attach it in the chat so Troy can read the pictures.")
         return _cap(text)
-    if ext in (".doc", ".docx", ".xls", ".ppt", ".pptx", ".dwg", ".zip", ".exe", ".msi", ".mp4", ".mov", ".mp3"):
+    if ext == ".docx":
+        import zipfile
+        import xml.etree.ElementTree as ET
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        root = ET.fromstring(zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml"))
+        paras = ["".join(t.text or "" for t in p.iter(w + "t")) for p in root.iter(w + "p")]
+        return _cap(f"Word {real.name}:\n" + "\n".join(x for x in paras if x.strip()))
+    if ext in (".doc", ".xls", ".ppt", ".pptx", ".dwg", ".zip", ".exe", ".msi", ".mp4", ".mov", ".mp3"):
         return f"{real.name} is a {ext} file ({_size(size)}). Troy can't read inside this kind from the drive."
     text = data.decode("utf-8", errors="replace")
     text = re.sub(r"data:[\w/+.\-]+;base64,[A-Za-z0-9+/=]{300,}", "[embedded data cut]", text)

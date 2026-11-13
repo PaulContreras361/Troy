@@ -43,8 +43,11 @@ MAX_XLSX_CHARS = 400_000   # text sent from one workbook (about 100k tokens)
 CODE_MIME = "text/x-troy-code"   # marker only: converted to text/plain before sending
 MAX_CODE_CHARS = 400_000   # code sent from one file after the bulk data is cut out
 
-# File types Troy can read. HEIC is left out on purpose: then the iPhone hands
-# over photos as JPEG, which both Claude and Gemini can read.
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+HEIC_MIME = "image/heic"   # iPhone photos: turned into JPEG before sending
+
+# File types Troy can read. The ＋ accepts anything; files not listed here get a
+# plain-English message saying what to do instead.
 FILE_TYPES = {
     "pdf": "application/pdf",
     "png": "image/png",
@@ -54,6 +57,10 @@ FILE_TYPES = {
     "txt": "text/plain",
     "md": "text/plain",
     "csv": "text/csv",
+    "docx": DOCX_MIME,          # Word: turned into text (headings, paragraphs, tables)
+    "xlsm": XLSX_MIME,          # Excel with macros: read like .xlsx (macros never run)
+    "heic": HEIC_MIME,
+    "heif": HEIC_MIME,
     "xlsx": XLSX_MIME,          # Excel: turned into text, every tab, before sending
     # Paul's own code and single-file apps. Big embedded data (images, map
     # coordinates) is cut out first so the code itself fits — see code_to_text.
@@ -2084,7 +2091,8 @@ submission = st.chat_input(
     key="composer",
     max_chars=MAX_PROMPT_CHARS,
     accept_file="multiple",
-    file_type=[f".{ext}" for ext in FILE_TYPES],
+    # No file-type list: the ＋ takes any file and Troy sorts out what's inside
+    # (and the ＋ tip no longer lists file types).
     accept_audio=True,
     max_upload_size=10,
 )
@@ -2268,6 +2276,75 @@ def code_to_text(name, data):
     return (note + text).encode("utf-8")
 
 
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def docx_to_text(name, data):
+    """Read a Word (.docx) file into text: headings marked, paragraphs, and tables
+    row by row. Returns (text bytes, problem)."""
+    import xml.etree.ElementTree as ET
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            root = ET.fromstring(z.read("word/document.xml"))
+    except Exception:
+        return None, f"Troy couldn't open {name}. Save it as a normal Word .docx and try again."
+
+    def para_text(p):
+        bits = []
+        for node in p.iter():
+            if node.tag == _W + "t" and node.text:
+                bits.append(node.text)
+            elif node.tag in (_W + "tab",):
+                bits.append("\t")
+            elif node.tag in (_W + "br", _W + "cr"):
+                bits.append("\n")
+        return "".join(bits).strip()
+
+    out = [f"Word document {name}:"]
+    body = root.find(_W + "body")
+    for el in (list(body) if body is not None else []):
+        if el.tag == _W + "p":
+            text = para_text(el)
+            if not text:
+                continue
+            style = el.find(f"{_W}pPr/{_W}pStyle")
+            sval = (style.get(_W + "val") if style is not None else "") or ""
+            if sval.lower().startswith("heading") or sval.lower() == "title":
+                level = re.sub(r"\D", "", sval) or "1"
+                out.append("\n" + "#" * min(int(level), 4) + " " + text)
+            elif el.find(f"{_W}pPr/{_W}numPr") is not None or "list" in sval.lower():
+                out.append("• " + text)
+            else:
+                out.append(text)
+        elif el.tag == _W + "tbl":
+            out.append("[Table]")
+            for r_i, row in enumerate(el.iter(_W + "tr"), 1):
+                cells = [" ".join(para_text(p) for p in c.iter(_W + "p")).strip()
+                         for c in row.iter(_W + "tc")]
+                out.append(f"Row {r_i}: " + " | ".join(cells))
+            out.append("[End table]")
+    text = "\n".join(out)
+    if len(text) > MAX_XLSX_CHARS:
+        text = text[:MAX_XLSX_CHARS] + "\n[… the rest of the document was cut off — too long to send at once]"
+    return text.encode("utf-8"), None
+
+
+def heic_to_jpeg(name, data):
+    """iPhone HEIC photo -> JPEG (Claude and Gemini read JPEG)."""
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+        img = Image.open(io.BytesIO(data))
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=90)
+        return out.getvalue(), None
+    except Exception:
+        return None, f"Troy couldn't open the iPhone photo {name}. Try sending it as a JPG."
+
+
+OLD_OFFICE = {"doc": "Word", "xls": "Excel", "ppt": "PowerPoint"}
+
+
 def file_parts(files):
     """Read uploaded files into a simple list. Returns (files, problem)."""
     if len(files) > MAX_FILES:
@@ -2279,8 +2356,12 @@ def file_parts(files):
             return None, f"{f.name} is over 10 MB. Try a smaller file."
         ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
         mime = FILE_TYPES.get(ext)
+        if ext in OLD_OFFICE:
+            return None, (f"{f.name} is an old {OLD_OFFICE[ext]} file. Open it in {OLD_OFFICE[ext]}, "
+                          f"choose File → Save As → .{ext}x, and send that one.")
         if mime is None:
-            return None, f"Troy can't read {f.name}. Use a PDF, photo, text or code file (HTML, .py, .js), Excel (.xlsx), or zip."
+            return None, (f"Troy can't read {f.name} yet. He reads PDFs, photos, Word, Excel, "
+                          "text and code files, and zips of those.")
         if ext == "zip":
             inside, skipped, problem = unzip(f.name, data)
             if problem:
@@ -2300,6 +2381,16 @@ def file_parts(files):
                 item["data"], item["mime"] = body, "text/plain"
             elif item["mime"] == CODE_MIME:
                 item["data"], item["mime"] = code_to_text(item["name"], item["data"]), "text/plain"
+            elif item["mime"] == DOCX_MIME:
+                body, problem = docx_to_text(item["name"], item["data"])
+                if problem:
+                    return None, problem
+                item["data"], item["mime"] = body, "text/plain"
+            elif item["mime"] == HEIC_MIME:
+                body, problem = heic_to_jpeg(item["name"], item["data"])
+                if problem:
+                    return None, problem
+                item["data"], item["mime"] = body, "image/jpeg"
             try:
                 item["data"], item["mime"] = shrink_photo(item["data"], item["mime"])
             except Exception:

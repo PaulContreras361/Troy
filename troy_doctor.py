@@ -305,8 +305,34 @@ def sample_files():
         z.writestr("setup.exe", b"MZ")           # Troy should skip this one
     files["sample.zip"] = buf.getvalue()
 
+    # A small real Word file: heading, bullet, paragraph, table.
+    W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    doc = (f'<?xml version="1.0" encoding="UTF-8"?><w:document {W}><w:body>'
+           '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Excavation Permit Notes</w:t></w:r></w:p>'
+           '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
+           '<w:r><w:t>Call Texas 811 first</w:t></w:r></w:p>'
+           '<w:p><w:r><w:t>Permit NKC23 closed on 11/11.</w:t></w:r></w:p>'
+           '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>EPR</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>'
+           '<w:tr><w:tc><w:p><w:r><w:t>XKC74</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Open</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+           '</w:body></w:document>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        z.writestr("word/document.xml", doc)
+    files["sample.docx"] = buf.getvalue()
+
+    try:   # an iPhone-style HEIC photo
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+        buf = io.BytesIO()
+        Image.new("RGB", (80, 60), (200, 120, 40)).save(buf, "HEIF")
+        files["iphone_photo.heic"] = buf.getvalue()
+    except Exception:
+        pass
+
+    files["old_word.doc"] = b"\xd0\xcf\x11\xe0 old word"
     files["broken.xlsx"] = b"this is not really an excel file"
-    files["notes.doc"] = b"old word file"
+    files["notes.xyz"] = b"some unknown kind of file"
     return files
 
 
@@ -425,8 +451,8 @@ def offline_checks(app_src=None, study_src=None, memory_src=None, drive_src=None
 
     def packages():
         missing = []
-        for mod in ("streamlit", "anthropic", "google.genai", "PIL", "pypdf", "pypdfium2",
-                    "openpyxl", "zoneinfo"):
+        for mod in ("streamlit", "anthropic", "google.genai", "PIL", "pillow_heif", "pypdf",
+                    "pypdfium2", "openpyxl", "zoneinfo"):
             try:
                 __import__(mod)
             except Exception:
@@ -479,6 +505,26 @@ def offline_checks(app_src=None, study_src=None, memory_src=None, drive_src=None
                 prob or (f"{len(samples['sample.html']) // 1024} KB page trimmed to "
                          f"{len(txt) // 1024} KB, code kept" if cut else "bulk data was not trimmed"))
 
+    def t_docx():
+        parts, prob = read("sample.docx")
+        txt = parts[0]["data"].decode("utf-8", "replace") if parts else ""
+        good = ("# Excavation Permit Notes" in txt and "• Call Texas 811 first" in txt
+                and "NKC23" in txt and "Row 2: XKC74 | Open" in txt)
+        return (not prob and good, prob or ("heading, bullets, text and table read" if good
+                                            else "Word text is missing headings, bullets or tables"))
+
+    def t_heic():
+        if "iphone_photo.heic" not in samples:
+            return False, "can't build an iPhone photo here — pillow-heif missing"
+        parts, prob = read("iphone_photo.heic")
+        return (not prob and parts and parts[0]["mime"] == "image/jpeg" and parts[0]["data"][:2] == b"\xff\xd8",
+                prob or "iPhone HEIC photo turned into a JPG")
+
+    def t_oldoffice():
+        parts, prob = read("old_word.doc")
+        return (bool(prob) and "Save As" in (prob or ""), "old .doc gets 'Save As .docx' steps" if prob
+                else "an old .doc slipped through")
+
     def t_text():
         bad = []
         for n in ("sample.csv", "sample.txt"):
@@ -500,12 +546,12 @@ def offline_checks(app_src=None, study_src=None, memory_src=None, drive_src=None
                 if prob else "a damaged Excel file slipped through")
 
     def t_unknown():
-        parts, prob = read("notes.doc")
+        parts, prob = read("notes.xyz")
         return (bool(prob), "unsupported file gets a friendly message" if prob
                 else "an unsupported file slipped through")
 
     def t_types():
-        want = {"pdf", "png", "jpg", "xlsx", "html", "csv", "txt", "zip"}
+        want = {"pdf", "png", "jpg", "xlsx", "docx", "heic", "html", "csv", "txt", "zip"}
         missing = sorted(want - set(types_ok))
         return (not missing, "upload box takes " + ", ".join(sorted(types_ok)) if not missing
                 else "upload box is missing: " + ", ".join(missing))
@@ -530,12 +576,14 @@ def offline_checks(app_src=None, study_src=None, memory_src=None, drive_src=None
     else:
         for name, fn in (("Upload box file types", t_types), ("PDF", t_pdf), ("Photo", t_png),
                          ("Big phone photo", t_big), ("Excel (.xlsx)", t_xlsx),
-                         ("HTML / code file", t_html), ("CSV and text", t_text), ("Zip", t_zip),
+                         ("HTML / code file", t_html), ("Word (.docx)", t_docx),
+                         ("iPhone photo (HEIC)", t_heic), ("Old Office file", t_oldoffice),
+                         ("CSV and text", t_text), ("Zip", t_zip),
                          ("Damaged file", t_broken), ("Unsupported file", t_unknown),
                          ("Packing files for Claude", t_blocks), ("Voice text cleanup", t_speech)):
             _check(results, "Reads: " + name if name not in
                    ("Packing files for Claude", "Voice text cleanup", "Upload box file types",
-                    "Damaged file", "Unsupported file") else name, fn)
+                    "Damaged file", "Unsupported file", "Old Office file") else name, fn)
 
     def t_study():
         mod = types.ModuleType("troy_study_under_test")
