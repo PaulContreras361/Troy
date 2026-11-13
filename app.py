@@ -20,6 +20,7 @@ from google import genai
 from PIL import Image
 
 import troy_study
+import troy_doctor   # checkup, error log, double-check, self-repair
 
 MAX_PROMPT_CHARS = 8_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
@@ -1298,6 +1299,29 @@ def troy_store():
     return st.components.v2.component("troy_store", js=STORE_JS)
 
 
+@st.cache_resource
+def troy_doctor_js():
+    return st.components.v2.component("troy_doctor_js", js=troy_doctor.BROWSER_JS)
+
+
+@st.cache_resource(show_spinner=False)
+def startup_checkup(signature):
+    """The quick offline checkup. Runs once each time Troy's code changes
+    (every redeploy), not on every visit."""
+    results = troy_doctor.offline_checks()
+    for r in results:
+        if not r["ok"]:
+            troy_doctor.log_error("startup checkup", detail=f"{r['name']}: {r['note']}")
+    return results
+
+
+def secret(name):
+    try:
+        return st.secrets[name]
+    except Exception:
+        return os.environ.get(name, "")
+
+
 MAX_SAVED_CHATS = 40
 
 
@@ -1500,7 +1524,22 @@ with st.sidebar:
         else:
             st.caption("AI brain: waiting for a key")
         st.caption("Human voice: " + ("Gemini (free)" if api_key else "needs Gemini key"))
+        double_check_on = st.toggle(
+            "Double-check answers about files", value=True, key="double_check",
+            help="After Troy answers from a file, a second quick pass checks the facts "
+            "(numbers, names, dates, rows) against the file and fixes them. Uses a little "
+            "more Claude credit, only when a file is attached.")
         st.caption("Chats are saved on this device only.")
+
+    # Troy's health: filled in further down, once the AI clients are ready.
+    health_box = st.container(key="health_box")
+    # Catches errors on the phone side (and two voices at once) for the error log.
+    doc_js = troy_doctor_js()(data={}, key="troy_doctor_js",
+                              on_errors_change=lambda: None, height=0)
+    if doc_js is not None and getattr(doc_js, "errors", None):
+        if st.session_state.get("doc_js_last") != doc_js.errors:
+            st.session_state.doc_js_last = doc_js.errors
+            troy_doctor.take_browser_errors(doc_js.errors)
 
     recents = sorted(st.session_state.chats.values(), key=lambda c: c["updated"], reverse=True)
     if query:
@@ -1636,6 +1675,183 @@ if api_key and st.session_state.get("key") != api_key:
     st.session_state.key = api_key
 
 
+# =====================================================================
+# 🩺 Troy's health — checkup, problems he noticed, and self-repair
+# =====================================================================
+startup_results = startup_checkup(troy_doctor.startup_signature())
+github = troy_doctor.github_from(secret)
+
+
+def _gh_refresh():
+    st.session_state.pop("gh_pending", None)
+
+
+def render_health():
+    full = st.session_state.get("full_checkup")
+    shown = full or startup_results
+    bad = [r for r in shown if not r["ok"]]
+    log = troy_doctor.read_log(30)
+    title = "Troy's health — " + (f"{len(bad)} problem{'s' if len(bad) != 1 else ''}" if bad
+                                   else "all good")
+    with st.expander(title, key="health_panel", icon=":material/monitor_heart:"):
+        passed = len(shown) - len(bad)
+        st.caption(f"{passed} of {len(shown)} checks passed — "
+                   + ("full checkup " + troy_doctor.when(st.session_state.full_checkup_at)
+                      if full else "quick check when Troy started"))
+        for r in bad:
+            st.markdown(f"❌ **{r['name']}** — {r['note']}")
+        if st.toggle("Show every check", key="show_all_checks"):
+            for r in shown:
+                if r["ok"]:
+                    st.markdown(f"✅ {r['name']} — {r['note']}")
+        voice_test = st.checkbox("Include a human-voice test (uses 1 voice call)", key="chk_voice")
+        if st.button("Run full checkup", key="run_checkup", icon=":material/stethoscope:",
+                     width="stretch"):
+            with st.spinner("Troy is checking every part of himself..."):
+                res = troy_doctor.offline_checks()
+                tts = st.session_state.get("tts_client") or st.session_state.get("client")
+                res += troy_doctor.online_checks(
+                    claude_client=st.session_state.get("claude") if claude_key else None,
+                    claude_model=claude_model,
+                    gemini_client=st.session_state.get("client") if api_key else None,
+                    tts_models=TTS_MODELS,
+                    voice_test=(lambda: human_voice(tts, "Checkup.", TTS_VOICES[voice_label]))
+                    if (voice_test and api_key) else None,
+                    github=github,
+                )
+            st.session_state.full_checkup = res
+            st.session_state.full_checkup_at = time.time()
+            for r in res:
+                if not r["ok"]:
+                    troy_doctor.log_error("full checkup", detail=f"{r['name']}: {r['note']}")
+            st.rerun()
+
+        st.markdown("**Problems Troy noticed**")
+        if not log:
+            st.caption("None so far.")
+        for e in log[:8]:
+            what = e.get("msg") or e.get("detail") or ""
+            times = f" (×{e['n']})" if e.get("n", 1) > 1 else ""
+            st.markdown(f"• {troy_doctor.when(e['t'])} · {e['where']}{times}: {what[:160]}")
+        if log and st.button("Clear the list", key="clear_log", type="tertiary",
+                             icon=":material/delete_sweep:"):
+            troy_doctor.clear_log()
+            st.rerun()
+
+        st.markdown("**Self-repair**")
+        if not github:
+            st.caption("Needs a GitHub key: add GITHUB_TOKEN to Troy's Streamlit Secrets "
+                       "(see the setup steps). Until then, checkup and the problem list still work.")
+            return
+        if not claude_key:
+            st.caption("Self-repair needs Troy's Claude key.")
+            return
+        note = st.text_area("Tell Troy what's wrong (optional)", key="repair_note", height=80,
+                            placeholder="e.g. two voices talk at once when I press the mic")
+        problems = troy_doctor.problems_for_repair(bad, log, note)
+        if st.button("Ask Troy to fix it", key="ask_fix", icon=":material/build:",
+                     width="stretch", disabled=not problems.strip(),
+                     help="Troy writes a fix, tests it with his checkup, and sends it to you "
+                     "to approve. Nothing changes until you tap Approve."):
+            with st.status("Troy is working on a fix...", expanded=True) as status:
+                try:
+                    res = troy_doctor.propose_fix(st.session_state.claude, github, problems,
+                                                  progress=status.write)
+                except Exception as e:
+                    troy_doctor.log_error("self-repair", e)
+                    res = {"status": "failed", "summary": f"Self-repair hit a problem: {e}"}
+                status.update(label="Done", state="complete")
+            st.session_state.repair_result = res
+            _gh_refresh()
+            st.rerun()
+        res = st.session_state.get("repair_result")
+        if res:
+            if res["status"] == "proposed":
+                st.success(f"Fix ready for you to approve ({res['tests']}).")
+            elif res["status"] == "no_code_fix":
+                st.info("No code change needed: " + res["summary"])
+            else:
+                st.warning(res["summary"])
+
+        if "gh_pending" not in st.session_state:
+            try:
+                st.session_state.gh_pending = troy_doctor.pending_fixes(github)
+            except Exception as e:
+                troy_doctor.log_error("checking for fixes on GitHub", e)
+                st.session_state.gh_pending = []
+        for p in st.session_state.gh_pending:
+            st.markdown(f"**Waiting for you:** [{p['title']}]({p['url']})")
+            st.caption(p["body"].split("\n\n")[0][:400])
+            a, r_ = st.columns(2)
+            if a.button("Approve", key=f"approve_{p['number']}", type="primary", width="stretch"):
+                try:
+                    troy_doctor.approve_fix(github, p["number"], p["branch"])
+                    st.session_state.repair_result = None
+                    st.session_state.fix_applied = True
+                except Exception as e:
+                    troy_doctor.log_error("approving a fix", e)
+                    st.session_state.repair_result = {"status": "failed",
+                                                      "summary": f"Couldn't apply it: {e}"}
+                _gh_refresh()
+                st.rerun()
+            if r_.button("Reject", key=f"reject_{p['number']}", width="stretch"):
+                try:
+                    troy_doctor.reject_fix(github, p["number"], p["branch"])
+                except Exception as e:
+                    troy_doctor.log_error("rejecting a fix", e)
+                st.session_state.repair_result = None
+                _gh_refresh()
+                st.rerun()
+        if st.session_state.pop("fix_applied", False):
+            st.success("Approved. Streamlit is rebuilding Troy — refresh in about 2 minutes. "
+                       "If anything's off, tap Undo last fix.")
+        if not st.session_state.get("confirm_undo"):
+            if st.button("Undo last fix", key="undo_fix", type="tertiary", icon=":material/undo:"):
+                try:
+                    st.session_state.undo_target = troy_doctor.last_applied_fix(github)
+                except Exception as e:
+                    troy_doctor.log_error("finding the last fix", e)
+                    st.session_state.undo_target = None
+                st.session_state.confirm_undo = True
+                st.rerun()
+        else:
+            fix = st.session_state.get("undo_target")
+            if not fix:
+                st.caption("No approved fixes to undo.")
+                st.session_state.confirm_undo = False
+            else:
+                st.warning(f"Undo “{fix['title']}”? Troy's files go back to exactly how they "
+                           "were before it.")
+                y, n_ = st.columns(2)
+                if y.button("Undo it", key="undo_yes", type="primary", width="stretch"):
+                    try:
+                        files = troy_doctor.undo_fix(github, fix)
+                        st.session_state.repair_result = {
+                            "status": "no_code_fix",
+                            "summary": f"Undone ({', '.join(files)}). Refresh in about 2 minutes."}
+                    except Exception as e:
+                        troy_doctor.log_error("undoing a fix", e)
+                        st.session_state.repair_result = {"status": "failed",
+                                                          "summary": f"Undo hit a problem: {e}"}
+                    st.session_state.confirm_undo = False
+                    st.rerun()
+                if n_.button("Cancel", key="undo_no", width="stretch"):
+                    st.session_state.confirm_undo = False
+                    st.rerun()
+
+
+with health_box:
+    render_health()
+
+# Startup check found something: say so once at the top, plainly.
+_startup_bad = [r for r in startup_results if not r["ok"]]
+if _startup_bad and not st.session_state.get("startup_warned"):
+    st.session_state.startup_warned = True
+    st.warning(f"Troy's startup check found {len(_startup_bad)} problem"
+               f"{'s' if len(_startup_bad) != 1 else ''}: {_startup_bad[0]['name']} — "
+               f"{_startup_bad[0]['note']}. Open ☰ → Troy's health.")
+
+
 def make_voice(msg):
     """Fill in msg['audio'], or a note saying why the device voice is used."""
     try:
@@ -1650,6 +1866,7 @@ def make_voice(msg):
             st.session_state.tts_off_today = True
             msg["voice_note"] = "Human voice used up for today — using your device's voice."
         else:
+            troy_doctor.log_error("making the human voice", e)
             code = getattr(e, "code", None)
             why = str(getattr(e, "message", "") or "").strip().split("\n")[0][:120]
             msg["voice_note"] = (
@@ -1703,6 +1920,7 @@ ask_about_files = bool(attached) and not prompt and not send_voice
 
 def explain_error(e):
     """Turn an error into a short, honest message without leaking details."""
+    troy_doctor.log_error("talking to Troy's brain", e)
     if isinstance(e, anthropic.APIError):
         code = getattr(e, "status_code", None)
         detail = str(getattr(e, "message", "") or e).lower()
@@ -1959,12 +2177,44 @@ def claude_messages():
     return out
 
 
+BUSY_CODES = (429, 500, 502, 503, 504, 529)
+
+
+def claude_create(**kw):
+    """Call Claude and adjust on the spot instead of failing:
+    busy or a dropped connection -> wait a moment and try again (twice);
+    the chosen model retired (404) -> switch to Troy's other model and note it."""
+    tried = set()
+    for attempt in range(4):
+        try:
+            return st.session_state.claude.messages.create(**kw)
+        except anthropic.APIConnectionError:
+            if attempt >= 2:
+                raise
+            time.sleep(2 + 2 * attempt)
+        except anthropic.APIStatusError as e:
+            code = getattr(e, "status_code", 0)
+            if code == 404 and "model" in str(e).lower():
+                tried.add(kw["model"])
+                other = [m for m in CLAUDE_MODELS.values() if m not in tried]
+                troy_doctor.log_error(f"Claude model {kw['model']} not found — switched to "
+                                      f"{other[0] if other else 'nothing'}", e)
+                if not other:
+                    raise
+                kw["model"] = other[0]
+            elif code in BUSY_CODES and attempt < 2:
+                time.sleep(2 + 2 * attempt)
+            else:
+                raise
+    raise RuntimeError("Claude didn't answer after several tries")
+
+
 def ask_claude(files, text):
     st.session_state.claude_history.append(
         {"role": "user", "content": claude_blocks(files, text)}
     )
     try:
-        response = st.session_state.claude.messages.create(
+        response = claude_create(
             model=claude_model,
             max_tokens=CLAUDE_MAX_REPLY_TOKENS,
             system=with_today(TROY_INSTRUCTIONS),
@@ -2036,6 +2286,14 @@ def send_to_troy(user_text, files, text, audio=None):
     except Exception as e:
         answer = explain_error(e)
         ok = False
+    # QA/QC: answers about files get checked against the file before Paul sees them.
+    if ok and files and brain == "claude" and double_check_on:
+        with st.spinner("Troy is double-checking against your file..."):
+            checked, footer = troy_doctor.double_check(
+                st.session_state.claude, claude_model, claude_blocks(files, "")[:-1], text, answer)
+        if checked != answer and st.session_state.claude_history:
+            st.session_state.claude_history[-1]["content"] = checked   # Troy remembers the fixed one
+        answer = checked + (("\n\n" + footer) if footer else "")
     reply = {"role": "assistant", "text": answer, "autoplay": auto_speak}
     if (ok and auto_speak and use_human_voice and api_key
             and not st.session_state.get("tts_off_today")):
@@ -2081,7 +2339,7 @@ def ask_brain_once(task, section, max_tokens=1200):
     """One-off question about a section (doesn't touch the chat history)."""
     content = f"Document: {st.session_state.study['name']}\n\nSECTION:\n{section}\n\nTASK:\n{task}"
     if brain == "claude":
-        r = st.session_state.claude.messages.create(
+        r = claude_create(
             model=claude_model, max_tokens=max_tokens, system=with_today(STUDY_SYSTEM),
             messages=[{"role": "user", "content": content}],
         )
@@ -2553,7 +2811,8 @@ if talk is not None and getattr(talk, "utterance", None):
         try:
             with st.spinner("Listening..."):
                 talk_said = transcribe(clip_bytes, "audio/wav")
-        except Exception:
+        except Exception as e:
+            troy_doctor.log_error("writing down what Paul said in Talk", e)
             talk_said = None
     if talk_said and talk_said.strip(" .") :
         auto_speak = True  # in a conversation Troy always answers out loud
@@ -2584,7 +2843,8 @@ if st.session_state.study_on and (prompt or send_voice or attached):
                 words = transcribe(voice_audio.getvalue(), voice_audio.type or "audio/wav")
             ask_study_question(((prompt + " ") if prompt else "") + words)
             st.rerun()
-        except Exception:
+        except Exception as e:
+            troy_doctor.log_error("writing down a voice message", e)
             st.warning("Troy couldn't make out that recording. Try again, or tap the 🎤 on "
                        "your keyboard and talk — it types for you.")
     else:
@@ -2596,6 +2856,7 @@ elif prompt or send_voice or ask_about_files:
     if not brain:
         st.warning("Add Troy's Claude key (or a Gemini key) in the sidebar first, then try again.")
     elif problem:
+        troy_doctor.log_error("reading an attached file", detail=problem)
         st.warning(problem)
     elif send_voice:
         audio_bytes = voice_audio.getvalue()
@@ -2612,7 +2873,8 @@ elif prompt or send_voice or ask_about_files:
                 said = (prompt + "\n\n" + words).strip() if prompt else words
                 send_to_troy("🎤 " + said + file_label(attached), parts, said)
                 st.rerun()
-            except Exception:
+            except Exception as e:
+                troy_doctor.log_error("writing down a voice message", e)
                 st.warning("Troy couldn't make out that recording. Try again, or tap "
                            "the 🎤 on your keyboard and talk — it types for you.")
         else:

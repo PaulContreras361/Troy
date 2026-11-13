@@ -96,3 +96,19 @@ Do not commit your actual `secrets.toml` to the repository. Check the deployment
 - The app uses Gemini 2.5 Flash.
 - Troy adapts explanations and may be mistaken; verify important information, especially for high-stakes decisions.
 - Voice recording requires microphone permission and browser support; spoken replies use your browser's text-to-speech voices and may be restricted by browser autoplay settings.
+
+## Troy's health (troy_doctor.py)
+
+Open ☰ → **Troy's health**.
+
+- **Checkup** — a quick offline check runs by itself each time Troy starts (after every redeploy). **Run full checkup** also tests the Claude/Gemini keys, the AI models, and (optionally) the human voice. Run it from a terminal too: `python troy_doctor.py`.
+- **Problems Troy noticed** — every real error, from Troy and from the phone (including two voices at once), with the time. Keys are never written to the log.
+- **Double-check answers about files** (Settings) — after Troy answers from a file, a second pass checks the facts against the file, fixes them, and checks again.
+- **Auto-adjust** — Claude busy: Troy waits and retries. Troy's Claude model retired: he switches to the other model and notes it.
+- **Self-repair** — **Ask Troy to fix it**: Troy reads his problem list and code from GitHub, writes a fix, tests it with the checkup (one retry if it breaks a check), and opens it as a pull request. Nothing changes until you tap **Approve**. **Undo last fix** puts the files back. Repairs may only change `app.py`, `troy_study.py` and `requirements.txt` — never `troy_doctor.py`, so Approve/Undo always keep working.
+
+Self-repair needs a GitHub key in Streamlit Secrets:
+
+```toml
+GITHUB_TOKEN = "github_pat_..."   # fine-grained, Troy repo only: Contents + Pull requests = Read and write
+```
